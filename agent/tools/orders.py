@@ -1,243 +1,207 @@
-"""Order management tools for the restaurant agent."""
+"""Order management tools for the restaurant agent.
 
-import json
-import os
-from datetime import datetime
-from typing import Optional
-from uuid import uuid4
+Tools use user_id from LangGraph configurable (injected via RunnableConfig).
+DB operations go through OrderService and MenuService.
+"""
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from agent.restaurant.menu import MENU, find_dish
-
-ORDERS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "orders.json")
-
-
-def _load_orders() -> dict:
-    if not os.path.exists(ORDERS_FILE):
-        return {}
-    with open(ORDERS_FILE) as f:
-        return json.load(f)
+from db.base import get_session
+from services.menu_service import MenuService
+from services.order_service import OrderService
 
 
-def _save_orders(orders: dict) -> None:
-    os.makedirs(os.path.dirname(ORDERS_FILE), exist_ok=True)
-    with open(ORDERS_FILE, "w") as f:
-        json.dump(orders, f, indent=2)
+def _get_user_id(config: RunnableConfig) -> str:
+    user_id = (config or {}).get("configurable", {}).get("user_id")
+    if not user_id:
+        raise ValueError("user_id not found in agent config — are you authenticated?")
+    return user_id
 
 
 @tool
-def search_menu(query: str) -> str:
+def search_menu(query: str, config: RunnableConfig = None) -> str:
     """Search the restaurant menu by dish name or item ID.
 
     Args:
         query: The dish name or ID to search for (e.g. 'butter chicken', 'M01', 'biryani').
     """
-    results = find_dish(query)
-    if not results:
+    with get_session() as db:
+        service = MenuService(db)
+        # Try exact ID match first
+        try:
+            item = service.get_item(query.upper())
+            items = [item]
+        except ValueError:
+            items = service.find_by_name(query)
+
+    if not items:
         return f"No dishes found matching '{query}'. Try a different search term."
 
     lines = []
-    for item in results:
-        lines.append(f"[{item['id']}] {item['name']} — ₹{item['price']} ({item['serving']})")
-        if "description" in item:
-            lines.append(f"  {item['description']}")
-        if "taste_profile" in item:
-            lines.append(f"  Taste: {item['taste_profile']}")
-        if "how_its_made" in item:
-            lines.append(f"  Preparation: {item['how_its_made']}")
-        if "popularity" in item:
-            lines.append(f"  Rating: {item['popularity']}/5 — {item.get('popularity_note', '')}")
-        if "spice_level" in item:
-            lines.append(f"  Spice level: {item['spice_level']}")
-        if "dietary" in item:
-            lines.append(f"  Dietary: {', '.join(item['dietary'])}")
-        avail = "Available" if item.get("available", True) else "Currently unavailable"
-        lines.append(f"  Status: {avail}")
+    for item in items:
+        lines.append(f"[{item.id}] {item.name} — ₹{float(item.price)} ({item.serving})")
+        if item.description:
+            lines.append(f"  {item.description}")
+        if item.taste_profile:
+            lines.append(f"  Taste: {item.taste_profile}")
+        if item.how_its_made:
+            lines.append(f"  Preparation: {item.how_its_made}")
+        if item.popularity:
+            lines.append(f"  Rating: {item.popularity}/5 — {item.popularity_note or ''}")
+        if item.spice_level:
+            lines.append(f"  Spice level: {item.spice_level}")
+        if item.dietary:
+            lines.append(f"  Dietary: {', '.join(item.dietary)}")
+        lines.append(f"  Status: {'Available' if item.available else 'Currently unavailable'}")
         lines.append("")
     return "\n".join(lines)
 
 
 @tool
-def get_menu_categories() -> str:
+def get_menu_categories(config: RunnableConfig = None) -> str:
     """Get an overview of all menu categories and their items with prices."""
+    with get_session() as db:
+        items = MenuService(db).list_items(include_unavailable=True)
+
+    by_category: dict[str, list] = {}
+    for item in items:
+        by_category.setdefault(item.category, []).append(item)
+
     lines = []
-    for category, items in MENU.items():
+    for category, cat_items in by_category.items():
         lines.append(f"\n— {category.upper()} —")
-        for item in items:
-            avail = "" if item.get("available", True) else " [UNAVAILABLE]"
-            lines.append(f"  [{item['id']}] {item['name']} — ₹{item['price']} ({item['serving']}){avail}")
+        for item in cat_items:
+            avail = "" if item.available else " [UNAVAILABLE]"
+            lines.append(f"  [{item.id}] {item.name} — ₹{float(item.price)} ({item.serving}){avail}")
     return "\n".join(lines)
 
 
 @tool
 def add_to_order(
-    table_id: str,
     item_id: str,
     quantity: int = 1,
     special_instructions: str = "",
+    config: RunnableConfig = None,
 ) -> str:
-    """Add an item to a table's order.
+    """Add an item to the current user's order.
 
     Args:
-        table_id: The table number or customer name.
         item_id: The menu item ID (e.g. 'M01', 'S02', 'B03').
         quantity: Number of this item to add.
         special_instructions: Any special requests (e.g. 'extra spicy', 'no onion').
     """
-    # Find the dish
-    results = find_dish(item_id)
-    if not results:
-        return f"Item '{item_id}' not found on the menu. Use get_menu_categories to see available items."
+    user_id = _get_user_id(config)
+    with get_session() as db:
+        service = OrderService(db)
+        cart = service.get_or_create_cart(user_id)
+        try:
+            oi = service.add_item(cart.id, item_id, quantity, special_instructions)
+            db.refresh(cart)
+            total = sum(float(i.price_at_order) * i.quantity for i in cart.items)
+            from db.repositories.menu_repo import MenuRepo
+            mi = MenuRepo(db).get_by_id(item_id)
+            name = mi.name if mi else item_id
+        except ValueError as e:
+            return str(e)
 
-    dish = results[0]
-    if not dish.get("available", True):
-        return f"Sorry, {dish['name']} is currently unavailable."
-
-    orders = _load_orders()
-
-    if table_id not in orders:
-        orders[table_id] = {
-            "order_id": str(uuid4())[:8],
-            "table": table_id,
-            "items": [],
-            "status": "open",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-        }
-
-    order_item = {
-        "item_id": dish["id"],
-        "name": dish["name"],
-        "quantity": quantity,
-        "price_each": dish["price"],
-        "total": dish["price"] * quantity,
-        "special_instructions": special_instructions,
-    }
-
-    orders[table_id]["items"].append(order_item)
-    orders[table_id]["updated_at"] = datetime.now().isoformat()
-    _save_orders(orders)
-
-    total = sum(i["total"] for i in orders[table_id]["items"])
     return (
-        f"Added {quantity}x {dish['name']} (₹{dish['price']} each) to {table_id}'s order."
+        f"Added {quantity}x {name} (₹{float(oi.price_at_order)} each) to your order."
         f"{' Note: ' + special_instructions if special_instructions else ''}"
         f"\nCurrent order total: ₹{total}"
     )
 
 
 @tool
-def view_order(table_id: str) -> str:
-    """View the current order for a table.
+def view_order(config: RunnableConfig = None) -> str:
+    """View your current order."""
+    user_id = _get_user_id(config)
+    with get_session() as db:
+        service = OrderService(db)
+        cart = service.get_or_create_cart(user_id)
+        if not cart.items:
+            return "Your order is empty."
 
-    Args:
-        table_id: The table number or customer name.
-    """
-    orders = _load_orders()
-    if table_id not in orders:
-        return f"No order found for {table_id}."
+        from db.repositories.menu_repo import MenuRepo
+        menu_repo = MenuRepo(db)
 
-    order = orders[table_id]
-    if not order["items"]:
-        return f"Order for {table_id} is empty."
+        lines = [f"Your order (#{cart.id[:8]}) — Status: {cart.status}"]
+        lines.append("-" * 40)
+        for i, item in enumerate(cart.items, 1):
+            mi = menu_repo.get_by_id(item.menu_item_id)
+            name = mi.name if mi else item.menu_item_id
+            total_price = float(item.price_at_order) * item.quantity
+            line = f"  {i}. {item.quantity}x {name} — ₹{total_price}"
+            if item.special_instructions:
+                line += f" ({item.special_instructions})"
+            lines.append(line)
 
-    lines = [f"Order for {table_id} (#{order['order_id']}) — Status: {order['status']}"]
-    lines.append("-" * 40)
-
-    for i, item in enumerate(order["items"], 1):
-        line = f"  {i}. {item['quantity']}x {item['name']} — ₹{item['total']}"
-        if item.get("special_instructions"):
-            line += f" ({item['special_instructions']})"
-        lines.append(line)
-
-    total = sum(i["total"] for i in order["items"])
-    lines.append("-" * 40)
-    lines.append(f"  TOTAL: ₹{total}")
-
+        total = sum(float(i.price_at_order) * i.quantity for i in cart.items)
+        lines.append("-" * 40)
+        lines.append(f"  TOTAL: ₹{total}")
     return "\n".join(lines)
 
 
 @tool
-def remove_from_order(table_id: str, item_name: str) -> str:
-    """Remove an item from a table's order by dish name.
+def remove_from_order(item_id: str, config: RunnableConfig = None) -> str:
+    """Remove an item from your order by item ID.
 
     Args:
-        table_id: The table number or customer name.
-        item_name: The name of the dish to remove (or part of it).
+        item_id: The menu item ID to remove (e.g. 'M01').
     """
-    orders = _load_orders()
-    if table_id not in orders:
-        return f"No order found for {table_id}."
+    user_id = _get_user_id(config)
+    with get_session() as db:
+        service = OrderService(db)
+        cart = service.get_or_create_cart(user_id)
+        from db.repositories.menu_repo import MenuRepo
+        mi = MenuRepo(db).get_by_id(item_id)
+        name = mi.name if mi else item_id
+        try:
+            service.remove_item(cart.id, item_id)
+            db.refresh(cart)
+            total = sum(float(i.price_at_order) * i.quantity for i in cart.items)
+        except ValueError as e:
+            return str(e)
 
-    order = orders[table_id]
-    name_lower = item_name.lower()
-    removed = None
-
-    for i, item in enumerate(order["items"]):
-        if name_lower in item["name"].lower():
-            removed = order["items"].pop(i)
-            break
-
-    if not removed:
-        return f"'{item_name}' not found in {table_id}'s order."
-
-    orders[table_id]["updated_at"] = datetime.now().isoformat()
-    _save_orders(orders)
-
-    total = sum(i["total"] for i in order["items"])
-    return f"Removed {removed['quantity']}x {removed['name']} from {table_id}'s order. New total: ₹{total}"
+    return f"Removed {name} from your order. New total: ₹{total}"
 
 
 @tool
-def confirm_order(table_id: str) -> str:
-    """Confirm and send a table's order to the kitchen.
+def confirm_order(config: RunnableConfig = None) -> str:
+    """Confirm and send your order to the kitchen."""
+    user_id = _get_user_id(config)
+    with get_session() as db:
+        service = OrderService(db)
+        cart = service.get_or_create_cart(user_id)
+        try:
+            order = service.confirm_order(cart.id)
+            total = sum(float(i.price_at_order) * i.quantity for i in order.items)
+            item_count = sum(i.quantity for i in order.items)
+        except ValueError as e:
+            return str(e)
 
-    Args:
-        table_id: The table number or customer name.
-    """
-    orders = _load_orders()
-    if table_id not in orders:
-        return f"No order found for {table_id}."
-
-    order = orders[table_id]
-    if not order["items"]:
-        return f"Cannot confirm an empty order for {table_id}."
-
-    if order["status"] != "open":
-        return f"Order for {table_id} is already {order['status']}."
-
-    order["status"] = "confirmed"
-    order["confirmed_at"] = datetime.now().isoformat()
-    _save_orders(orders)
-
-    total = sum(i["total"] for i in order["items"])
-    item_count = sum(i["quantity"] for i in order["items"])
     return (
-        f"Order #{order['order_id']} for {table_id} confirmed and sent to kitchen!"
+        f"Order #{order.id[:8]} confirmed and sent to the kitchen!"
         f"\n{item_count} items, total: ₹{total}"
         f"\nEstimated preparation time: 20-25 minutes."
     )
 
 
 @tool
-def cancel_order(table_id: str) -> str:
-    """Cancel a table's entire order.
+def cancel_order(config: RunnableConfig = None) -> str:
+    """Cancel your current order."""
+    user_id = _get_user_id(config)
+    with get_session() as db:
+        service = OrderService(db)
+        cart = service.get_or_create_cart(user_id)
+        if cart.status == "confirmed":
+            return (
+                "Your order has already been sent to the kitchen. "
+                "Please speak to the manager for cancellations after confirmation."
+            )
+        try:
+            service.cancel_order(cart.id)
+        except ValueError as e:
+            return str(e)
 
-    Args:
-        table_id: The table number or customer name.
-    """
-    orders = _load_orders()
-    if table_id not in orders:
-        return f"No order found for {table_id}."
-
-    order = orders[table_id]
-    if order["status"] == "confirmed":
-        return (
-            f"Order for {table_id} has already been sent to the kitchen. "
-            f"Please speak to the manager for cancellations after confirmation."
-        )
-
-    del orders[table_id]
-    _save_orders(orders)
-    return f"Order for {table_id} has been cancelled."
+    return "Your order has been cancelled."
