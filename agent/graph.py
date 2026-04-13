@@ -78,6 +78,8 @@ async def invoke_agent(
     fallback_agent,
     message: str,
     thread_id: str,
+    user_id: str = None,
+    prior_messages: list = None,
 ) -> str:
     """Invoke the agent with a message, falling back on rate limits.
 
@@ -86,12 +88,21 @@ async def invoke_agent(
         fallback_agent: Fallback LangGraph agent (NVIDIA NIM).
         message: User message text.
         thread_id: Conversation thread ID for state persistence.
+        user_id: Optional user ID for configurable context.
+        prior_messages: Optional list of prior LangChain messages to prepend.
 
     Returns:
         The assistant's text response.
     """
-    config = {"configurable": {"thread_id": thread_id}}
-    inputs = {"messages": [HumanMessage(content=message)]}
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "user_id": user_id,
+        }
+    }
+
+    history = prior_messages or []
+    inputs = {"messages": history + [HumanMessage(content=message)]}
 
     try:
         result = await agent.ainvoke(inputs, config=config)

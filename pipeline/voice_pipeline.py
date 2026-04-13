@@ -155,7 +155,7 @@ async def _pc_delete_note(params: FunctionCallParams, note_id: str) -> None:
 # --- Pipeline factory ---
 
 
-def create_pipeline(websocket: WebSocket):
+def create_pipeline(websocket: WebSocket, user_id: str = None):
     """Create a fresh voice pipeline for a single client connection."""
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
