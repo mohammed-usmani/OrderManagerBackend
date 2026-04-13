@@ -20,6 +20,10 @@ dependencies = [
     "python-jose[cryptography]",
     "redis",
     "httpx",
+]
+
+[tool.uv]
+dev-dependencies = [
     "pytest",
     "pytest-asyncio",
 ]
