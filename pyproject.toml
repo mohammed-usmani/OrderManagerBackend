@@ -1,0 +1,16 @@
+[project]
+name = "server"
+version = "0.1.0"
+description = "Voice agent system for restaurant order management"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pipecat-ai[groq,silero,websocket]",
+    "mistralai",
+    "python-dotenv",
+    "websockets>=13.1,<16",
+    "uvicorn[standard]",
+    "langgraph",
+    "langchain-groq",
+    "langchain-nvidia-ai-endpoints",
+]
