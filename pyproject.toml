@@ -13,4 +13,13 @@ dependencies = [
     "langgraph",
     "langchain-groq",
     "langchain-nvidia-ai-endpoints",
+    "sqlalchemy>=2.0",
+    "alembic",
+    "psycopg2-binary",
+    "passlib[bcrypt]",
+    "python-jose[cryptography]",
+    "redis",
+    "httpx",
+    "pytest",
+    "pytest-asyncio",
 ]
