@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-TEST_DATABASE_URL = "postgresql://postgres:postgres@localhost/restaurant_test"
+TEST_DATABASE_URL = "postgresql://mohammed:mohammed%40123@localhost/restaurant_test"
 
 
 @pytest.fixture(scope="session", autouse=True)
