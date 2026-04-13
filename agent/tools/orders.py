@@ -35,27 +35,28 @@ def search_menu(query: str, config: RunnableConfig = None) -> str:
         except ValueError:
             items = service.find_by_name(query)
 
-    if not items:
-        return f"No dishes found matching '{query}'. Try a different search term."
+        if not items:
+            return f"No dishes found matching '{query}'. Try a different search term."
 
-    lines = []
-    for item in items:
-        lines.append(f"[{item.id}] {item.name} — ₹{float(item.price)} ({item.serving})")
-        if item.description:
-            lines.append(f"  {item.description}")
-        if item.taste_profile:
-            lines.append(f"  Taste: {item.taste_profile}")
-        if item.how_its_made:
-            lines.append(f"  Preparation: {item.how_its_made}")
-        if item.popularity:
-            lines.append(f"  Rating: {item.popularity}/5 — {item.popularity_note or ''}")
-        if item.spice_level:
-            lines.append(f"  Spice level: {item.spice_level}")
-        if item.dietary:
-            lines.append(f"  Dietary: {', '.join(item.dietary)}")
-        lines.append(f"  Status: {'Available' if item.available else 'Currently unavailable'}")
-        lines.append("")
-    return "\n".join(lines)
+        lines = []
+        for item in items:
+            lines.append(f"[{item.id}] {item.name} — ₹{float(item.price)} ({item.serving})")
+            if item.description:
+                lines.append(f"  {item.description}")
+            if item.taste_profile:
+                lines.append(f"  Taste: {item.taste_profile}")
+            if item.how_its_made:
+                lines.append(f"  Preparation: {item.how_its_made}")
+            if item.popularity:
+                lines.append(f"  Rating: {item.popularity}/5 — {item.popularity_note or ''}")
+            if item.spice_level:
+                lines.append(f"  Spice level: {item.spice_level}")
+            if item.dietary:
+                lines.append(f"  Dietary: {', '.join(item.dietary)}")
+            lines.append(f"  Status: {'Available' if item.available else 'Currently unavailable'}")
+            lines.append("")
+        result = "\n".join(lines)
+    return result
 
 
 @tool
@@ -64,17 +65,18 @@ def get_menu_categories(config: RunnableConfig = None) -> str:
     with get_session() as db:
         items = MenuService(db).list_items(include_unavailable=True)
 
-    by_category: dict[str, list] = {}
-    for item in items:
-        by_category.setdefault(item.category, []).append(item)
+        by_category: dict[str, list] = {}
+        for item in items:
+            by_category.setdefault(item.category, []).append(item)
 
-    lines = []
-    for category, cat_items in by_category.items():
-        lines.append(f"\n— {category.upper()} —")
-        for item in cat_items:
-            avail = "" if item.available else " [UNAVAILABLE]"
-            lines.append(f"  [{item.id}] {item.name} — ₹{float(item.price)} ({item.serving}){avail}")
-    return "\n".join(lines)
+        lines = []
+        for category, cat_items in by_category.items():
+            lines.append(f"\n— {category.upper()} —")
+            for item in cat_items:
+                avail = "" if item.available else " [UNAVAILABLE]"
+                lines.append(f"  [{item.id}] {item.name} — ₹{float(item.price)} ({item.serving}){avail}")
+        result = "\n".join(lines)
+    return result
 
 
 @tool
@@ -98,6 +100,7 @@ def add_to_order(
         try:
             oi = service.add_item(cart.id, item_id, quantity, special_instructions)
             db.refresh(cart)
+            price_each = float(oi.price_at_order)
             total = sum(float(i.price_at_order) * i.quantity for i in cart.items)
             from db.repositories.menu_repo import MenuRepo
             mi = MenuRepo(db).get_by_id(item_id)
@@ -106,7 +109,7 @@ def add_to_order(
             return str(e)
 
     return (
-        f"Added {quantity}x {name} (₹{float(oi.price_at_order)} each) to your order."
+        f"Added {quantity}x {name} (₹{price_each} each) to your order."
         f"{' Note: ' + special_instructions if special_instructions else ''}"
         f"\nCurrent order total: ₹{total}"
     )
@@ -177,11 +180,12 @@ def confirm_order(config: RunnableConfig = None) -> str:
             order = service.confirm_order(cart.id)
             total = sum(float(i.price_at_order) * i.quantity for i in order.items)
             item_count = sum(i.quantity for i in order.items)
+            order_id_short = order.id[:8]
         except ValueError as e:
             return str(e)
 
     return (
-        f"Order #{order.id[:8]} confirmed and sent to the kitchen!"
+        f"Order #{order_id_short} confirmed and sent to the kitchen!"
         f"\n{item_count} items, total: ₹{total}"
         f"\nEstimated preparation time: 20-25 minutes."
     )
