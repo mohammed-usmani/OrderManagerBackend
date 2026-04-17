@@ -25,6 +25,7 @@ class MenuItemResponse(BaseModel):
     spice_level: str | None
     popularity: float | None
     popularity_note: str | None
+    image_url: str | None
     available: bool
 
     model_config = {"from_attributes": True}
@@ -44,16 +45,25 @@ class CreateMenuItemRequest(BaseModel):
     spice_level: str | None = None
     popularity: float | None = None
     popularity_note: str | None = None
+    image_url: str | None = None
     available: bool = True
 
 
 class UpdateMenuItemRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    how_its_made: str | None = None
+    taste_profile: str | None = None
+    category: str | None = None
     price: float | None = None
-    available: bool | None = None
-    spice_level: str | None = None
+    currency: str | None = None
     serving: str | None = None
+    dietary: list | None = None
+    spice_level: str | None = None
+    popularity: float | None = None
+    popularity_note: str | None = None
+    image_url: str | None = None
+    available: bool | None = None
 
 
 @router.get("", response_model=list[MenuItemResponse])

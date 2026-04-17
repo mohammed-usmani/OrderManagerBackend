@@ -115,3 +115,14 @@ class OrderService:
         if not order or order.user_id != user_id:
             raise ValueError("Order not found")
         return order
+
+    # --- Admin-scope helpers (skip ownership check) ---
+
+    def list_orders_admin(self, statuses: list[str] | None = None) -> list[Order]:
+        return self.order_repo.list_all(statuses=statuses)
+
+    def get_order_admin(self, order_id: str) -> Order:
+        order = self.order_repo.get_by_id(order_id)
+        if not order:
+            raise ValueError("Order not found")
+        return order

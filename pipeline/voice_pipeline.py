@@ -99,14 +99,22 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
     # --- Menu tools -------------------------------------------------------
 
     async def pc_search_menu(params: FunctionCallParams, query: str) -> None:
-        """Search the restaurant menu by dish name or item ID.
+        """Search the menu with freeform keywords.
 
-        Any matching dishes are rendered as cards on the customer's screen.
-        In your spoken reply, just name the top 2-3 options and their prices —
-        don't dump full descriptions since the UI shows that.
+        Matches tokens in the query against dish name, description, taste
+        profile, preparation notes, category, spice level, and dietary tags.
+        Ranks by how many tokens hit.
+
+        Use for fuzzy or intent-style queries like "spicy", "paneer vegan",
+        "something creamy". For structured filters (e.g. "starters under
+        ₹400") use filter_menu instead.
+
+        Dishes show on the customer's screen — speak only the top 2-3 names
+        and their prices.
 
         Args:
-            query: Dish name or ID to search for.
+            query: Freeform search terms (e.g. "chicken tikka", "spicy",
+                "vegan dessert").
         """
         stop = _loop_guard("pc_search_menu", f"q={query}")
         if stop:
@@ -116,21 +124,107 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         with get_session() as db:
             service = MenuService(db)
             items: list = []
+            # Exact ID hit first (e.g. "M01").
             try:
-                items = [service.get_item(query.upper())]
+                items = [service.get_item(query.strip().upper())]
             except ValueError:
-                items = service.find_by_name(query)
+                items = service.search(query)
 
             cards = [menu_item_to_card(i) for i in items]
 
-        await push_ui_event(params.llm, "menu_results", {"title": f"Results for '{query}'", "items": cards})
+        await push_ui_event(
+            params.llm,
+            "menu_results",
+            {"title": f"Results for '{query}'", "items": cards},
+        )
 
         if not cards:
             msg = f"No matches for '{query}'."
         else:
-            names = ", ".join(f"{c['name']} (₹{c['price']})" for c in cards[:3])
-            more = f" and {len(cards) - 3} more" if len(cards) > 3 else ""
-            msg = f"Showing {len(cards)} match(es) on screen: {names}{more}."
+            # Include every item's ID so the LLM has the exact IDs it needs
+            # to call add_to_order next. Rendering is handled by the UI card;
+            # the spoken reply should still be short (system prompt enforces).
+            lines = [f"{len(cards)} match(es) for '{query}':"]
+            for c in cards:
+                lines.append(
+                    f"  - {c['name']} [id={c['id']}] — ₹{c['price']} ({c['category']})"
+                )
+            msg = "\n".join(lines)
+        await params.result_callback(msg)
+
+    async def pc_filter_menu(
+        params: FunctionCallParams,
+        category: str = "",
+        dietary: str = "",
+        spice_level: str = "",
+        max_price: float = 0,
+        keyword: str = "",
+    ) -> None:
+        """Filter the menu by one or more structured criteria (AND).
+
+        Use when the customer combines constraints like "vegan mains under
+        ₹400" or "mild starters". For a single freeform word like "spicy"
+        or dish name, prefer search_menu.
+
+        Matching dishes render as cards on screen.
+
+        Args:
+            category: One of: starters, mains, breads, rice, desserts, beverages.
+                Empty = any category.
+            dietary: Comma-separated tags like "vegan", "gluten-free",
+                "vegetarian". All listed tags must match.
+            spice_level: e.g. "mild", "medium", "spicy". Empty = any.
+            max_price: Upper price bound in rupees. 0 = no limit.
+            keyword: Additional freeform terms to narrow the filter further.
+        """
+        sig = f"c={category}|d={dietary}|s={spice_level}|p={max_price}|k={keyword}"
+        stop = _loop_guard("pc_filter_menu", sig)
+        if stop:
+            await params.result_callback(stop)
+            return
+
+        dietary_list = [t.strip() for t in dietary.split(",") if t.strip()]
+        max_price_val = float(max_price) if max_price and max_price > 0 else None
+
+        with get_session() as db:
+            service = MenuService(db)
+            items = service.filter(
+                category=category or None,
+                dietary=dietary_list or None,
+                spice_level=spice_level or None,
+                max_price=max_price_val,
+                keyword=keyword or None,
+            )
+            cards = [menu_item_to_card(i) for i in items]
+
+        parts = []
+        if category:
+            parts.append(category)
+        if dietary_list:
+            parts.append(" ".join(dietary_list))
+        if spice_level:
+            parts.append(spice_level)
+        if max_price_val:
+            parts.append(f"under ₹{int(max_price_val)}")
+        if keyword:
+            parts.append(f'"{keyword}"')
+        title = "Menu filter: " + (", ".join(parts) if parts else "all")
+
+        await push_ui_event(
+            params.llm,
+            "menu_results",
+            {"title": title, "items": cards},
+        )
+
+        if not cards:
+            msg = "No dishes match those filters."
+        else:
+            lines = [f"{len(cards)} match(es) for filter {title}:"]
+            for c in cards:
+                lines.append(
+                    f"  - {c['name']} [id={c['id']}] — ₹{c['price']} ({c['category']})"
+                )
+            msg = "\n".join(lines)
         await params.result_callback(msg)
 
     async def pc_get_menu_categories(params: FunctionCallParams) -> None:
@@ -138,6 +232,8 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
 
         The full menu is rendered on the customer's screen. In your spoken
         reply, just name the categories available — don't list every dish.
+        The text response (LLM-only) includes every item's ID so you can
+        resolve any dish the customer mentions without a second search.
         """
         stop = _loop_guard("pc_get_menu_categories", "")
         if stop:
@@ -150,8 +246,17 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
 
         await push_ui_event(params.llm, "menu_results", {"title": "Our Menu", "items": cards})
 
-        categories = sorted({c["category"] for c in cards})
-        msg = f"Full menu shown. Categories: {', '.join(categories)}."
+        # Group by category with full id,name,price list so the LLM can map
+        # any spoken dish name to its exact id without another tool call.
+        by_cat: dict[str, list[dict]] = {}
+        for c in cards:
+            by_cat.setdefault(c["category"], []).append(c)
+        lines = ["Full menu:"]
+        for cat in sorted(by_cat.keys()):
+            lines.append(f"  {cat}:")
+            for c in by_cat[cat]:
+                lines.append(f"    - {c['name']} [id={c['id']}] — ₹{c['price']}")
+        msg = "\n".join(lines)
         await params.result_callback(msg)
 
     # --- Cart tools -------------------------------------------------------
@@ -159,8 +264,10 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
     async def pc_view_order(params: FunctionCallParams) -> None:
         """Show the customer's current in-progress cart.
 
-        Renders the cart on screen. Your spoken reply should be a one-liner
-        (item count + total) — the UI shows the breakdown.
+        Renders the full cart on screen. The text response includes the
+        menu_item_id of every line so you can reference them when the
+        customer asks to remove something. Your spoken reply should still
+        be a one-liner (count + total); the UI shows the breakdown.
         """
         stop = _loop_guard("pc_view_order", "")
         if stop:
@@ -178,7 +285,21 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if not card["items"]:
             msg = "Your cart is empty."
         else:
-            msg = f"Cart: {card['item_count']} item(s), total ₹{card['total']}."
+            # Full breakdown so the LLM knows every item_id and can act on
+            # pre-existing items across conversation / process restarts.
+            lines = [
+                f"Cart (#{card['id'][:8]}) — {card['item_count']} item(s):"
+            ]
+            for it in card["items"]:
+                note = f" ({it['special_instructions']})" if it["special_instructions"] else ""
+                lines.append(
+                    f"  - {it['quantity']}× {it['name']} [id={it['menu_item_id']}] — ₹{it['line_total']}{note}"
+                )
+            lines.append(f"Subtotal: ₹{card['subtotal']:.2f}")
+            for ch in card["charges"]:
+                lines.append(f"  + {ch['label']}: ₹{ch['amount']:.2f}")
+            lines.append(f"Total (incl. charges): ₹{card['total']:.2f}")
+            msg = "\n".join(lines)
         await params.result_callback(msg)
 
     async def pc_add_to_order(
@@ -277,9 +398,12 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
             card = order_to_card(order, menu_repo)
 
         await push_ui_event(params.llm, "order_confirmed", card)
+        charges_str = ", ".join(
+            f"{c['label'].lower()} ₹{c['amount']:.2f}" for c in card["charges"]
+        )
         await params.result_callback(
-            f"Order #{card['id'][:8]} confirmed — ₹{card['total']}. "
-            "Kitchen has it."
+            f"Order #{card['id'][:8]} confirmed. Subtotal ₹{card['subtotal']:.2f}; "
+            f"{charges_str}; grand total ₹{card['total']:.2f}. Kitchen has it."
         )
 
     async def pc_cancel_order(params: FunctionCallParams) -> None:
@@ -361,8 +485,40 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
             msg = f"No orders with status '{status}'."
         else:
             summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
-            msg = f"Your order history is on screen. Summary: {summary}."
+            lines = [f"Order history — {summary}:"]
+            for c in cards:
+                lines.append(
+                    f"  - #{c['id'][:8]} {c['status']} — {c['item_count']} item(s) — ₹{c['total']}"
+                )
+            msg = "\n".join(lines)
         await params.result_callback(msg)
+
+    # --- Session control --------------------------------------------------
+
+    async def pc_end_conversation(
+        params: FunctionCallParams,
+        reason: str = "goodbye",
+    ) -> None:
+        """End the voice conversation.
+
+        Call this ONLY when the customer clearly wants to stop (says
+        goodbye / thanks that's all / see you / bye), OR after confirm_order
+        succeeds AND the customer doesn't have follow-up questions.
+
+        Your spoken reply right before this tool should be a short, warm
+        closing ("Enjoy your meal, see you soon!"). The client waits for
+        your audio to finish playing before it disconnects, so do NOT call
+        another tool after this one — the session is ending.
+
+        Args:
+            reason: Short label for logs — "goodbye", "after_payment",
+                "user_hangup", etc.
+        """
+        await push_ui_event(params.llm, "session_end", {"reason": reason})
+        await params.result_callback(
+            "Session ending — the mic will close after your closing line "
+            "finishes playing. Do not call any more tools."
+        )
 
     # --- Datetime (no UI; just text) -------------------------------------
 
@@ -384,6 +540,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
 
     return [
         pc_search_menu,
+        pc_filter_menu,
         pc_get_menu_categories,
         pc_view_order,
         pc_add_to_order,
@@ -391,6 +548,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         pc_confirm_order,
         pc_cancel_order,
         pc_search_my_orders,
+        pc_end_conversation,
         pc_get_current_datetime,
     ]
 
@@ -426,7 +584,9 @@ def create_pipeline(
         build_time_context_message(user_timezone) + "\n\n" + SYSTEM_PROMPT
     )
 
-    # Collect tool schemas up front so we can pass them to Gemini at connect time.
+    # Collect tool schemas up front. Pass tools at init time ONLY — if we also
+    # put them on the LLMContext, Pipecat treats that as a change-at-runtime
+    # and forces a reconnect (during which audio is dropped).
     tool_fns = _make_tool_wrappers(user_id or "", user_timezone)
     tool_schemas = [DirectFunctionWrapper(f).to_function_schema() for f in tool_fns]
     tools = ToolsSchema(standard_tools=tool_schemas)
@@ -448,7 +608,9 @@ def create_pipeline(
     # Universal context + aggregator (new API; the service's
     # create_context_aggregator helper is deprecated in 0.0.108).
     # VAD lives on the user aggregator per Pipecat's new convention.
-    context = LLMContext(tools=tools)
+    # NOTE: don't set tools on the context — init-time tools are already
+    # active, and adding them here would trigger an unnecessary reconnect.
+    context = LLMContext()
     agg = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),

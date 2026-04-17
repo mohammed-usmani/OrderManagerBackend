@@ -13,13 +13,14 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 
 from config import ADMIN_EMAIL, ADMIN_PASSWORD
 from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline
-from routers import auth, menu, orders
+from routers import admin, auth, menu, orders
 from services.auth_service import auth_service
 
 
@@ -48,6 +49,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(menu.router)
 app.include_router(orders.router)
+app.include_router(admin.router)
 
 
 # --- Voice WebSocket endpoint ---
@@ -75,6 +77,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     pipeline = create_pipeline(websocket, user_id=user_id, user_timezone=user_timezone)
     task = PipelineTask(pipeline)
+
+    # Kick Gemini Live into a ready state. The service only becomes ready for
+    # realtime audio after its _handle_context runs, which only fires on a
+    # context frame. The user aggregator pushes a context frame when it
+    # receives an LLMRunFrame, so we emit one right as the pipeline starts.
+    @task.event_handler("on_pipeline_started")
+    async def _kickstart(_task, _frame):
+        await _task.queue_frames([LLMRunFrame()])
+
     runner = PipelineRunner(handle_sigint=False)
 
     await runner.run(task)

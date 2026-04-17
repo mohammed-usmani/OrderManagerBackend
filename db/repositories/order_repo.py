@@ -27,6 +27,13 @@ class OrderRepo:
             .all()
         )
 
+    def list_all(self, statuses: list[str] | None = None) -> list[Order]:
+        """Admin-scope: list every order, optionally filtered by status."""
+        q = self.db.query(Order)
+        if statuses:
+            q = q.filter(Order.status.in_(statuses))
+        return q.order_by(Order.created_at.desc()).all()
+
     def create(self, user_id: str) -> Order:
         order = Order(user_id=user_id)
         self.db.add(order)

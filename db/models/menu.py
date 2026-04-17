@@ -26,6 +26,7 @@ class MenuItem(Base):
     spice_level: Mapped[str | None] = mapped_column(String)
     popularity: Mapped[float | None] = mapped_column(Float)
     popularity_note: Mapped[str | None] = mapped_column(Text)
+    image_url: Mapped[str | None] = mapped_column(Text)
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False

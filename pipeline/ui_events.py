@@ -12,6 +12,25 @@ from typing import Any
 from pipecat.frames.frames import OutputTransportMessageUrgentFrame
 from pipecat.services.llm_service import LLMService
 
+from config import BILL_CHARGES
+
+
+def compute_bill(subtotal: float) -> dict:
+    """Apply the restaurant's charges (service + GST) on top of a subtotal.
+
+    Returns {subtotal, charges: [{label, amount}], total}.
+    """
+    charges = [
+        {"label": c["label"], "rate": c["rate"], "amount": subtotal * c["rate"]}
+        for c in BILL_CHARGES
+    ]
+    total = subtotal + sum(c["amount"] for c in charges)
+    return {
+        "subtotal": subtotal,
+        "charges": charges,
+        "total": total,
+    }
+
 
 async def push_ui_event(llm: LLMService, event_type: str, payload: Any) -> None:
     """Send a UI event to the connected client.
@@ -44,6 +63,7 @@ def menu_item_to_card(item) -> dict:
         "dietary": list(item.dietary) if item.dietary else [],
         "spice_level": item.spice_level,
         "popularity": item.popularity,
+        "image_url": item.image_url,
         "available": bool(item.available),
     }
 
@@ -64,8 +84,10 @@ def order_item_to_card(item, menu_repo) -> dict:
 
 
 def order_to_card(order, menu_repo) -> dict:
-    """Order ORM → UI card dict."""
+    """Order ORM → UI card dict with full bill breakdown."""
     items = [order_item_to_card(i, menu_repo) for i in order.items]
+    subtotal = sum(i["line_total"] for i in items)
+    bill = compute_bill(subtotal)
     return {
         "id": order.id,
         "status": order.status,
@@ -73,6 +95,8 @@ def order_to_card(order, menu_repo) -> dict:
         "confirmed_at": order.confirmed_at.isoformat() if order.confirmed_at else None,
         "paid_at": order.paid_at.isoformat() if order.paid_at else None,
         "items": items,
-        "total": sum(i["line_total"] for i in items),
         "item_count": sum(i["quantity"] for i in items),
+        "subtotal": bill["subtotal"],
+        "charges": bill["charges"],
+        "total": bill["total"],
     }

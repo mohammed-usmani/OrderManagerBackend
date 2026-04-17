@@ -2,8 +2,41 @@
 
 Every dish has: name, category, description, how it's made, taste profile,
 popularity rating (1-5 stars from customer reviews), price, quantity/serving
-info, dietary tags, and availability.
+info, dietary tags, image URL, and availability.
 """
+
+# Image URLs. Edit this map (not the dish entries below) if you want to swap
+# images. The seeder syncs the DB to this map on every server restart.
+IMAGE_URLS = {
+    "S01": "https://www.jcookingodyssey.com/wp-content/uploads/2025/07/tandoori-paneer-tikka.jpg",
+    "S02": "https://cdn.meatigo.com/fit-in/651x552/product/1774507134478_128_26082022_Mutton_Galouti_Kebab",
+    "S03": "https://dinnerthendessert.com/wp-content/uploads/2019/02/Dynamite-Shrimp-1048x699.jpg",
+    "S04": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRTUsFrRlZSNhLbz2NaeluUH28xmyqX3glb7A&s",
+    "M01": "https://sugarspunrun.com/wp-content/uploads/2025/04/Butter-chicken-1-of-1.jpg",
+    "M02": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ9i0_mIQiugdza8foHQ4nbXk3aZtstphJ4XmUfqah0hdnKPix6MObQ0tYOaAursG8MXkbReM53qxd1UsP1GuPX4YbD6HAp3ehIroraMpk&s=10",
+    "M03": "https://www.cookwithmanali.com/wp-content/uploads/2019/04/Restaurant-Style-Dal-Makhani-500x500.jpg",
+    "M04": "https://www.cookwithkushi.com/wp-content/uploads/2023/10/best_simple_easy_chicken_dum_biryani.jpg",
+    "M05": "https://www.mygingergarlickitchen.com/wp-content/rich-markup-images/1x1/1x1-paneer-lababdar.jpg",
+    "M06": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxJ9wBsb3SIbPoIx0cz3fimI4nVytblzwFAw&s",
+    "B01": "https://www.pachakam.com/wp-content/uploads/2009/05/new-butter-naan-500x375.jpg",
+    "B02": "https://www.supergoldenbakes.com/wordpress/wp-content/uploads/2025/09/Garlic_Naan-8.jpg",
+    "B03": "https://myfoodstory.com/wp-content/uploads/2022/08/Homemade-Lachha-Paratha-3-500x500.jpg",
+    "B04": "https://www.cookwithmanali.com/wp-content/uploads/2021/07/Tandoori-Roti.jpg",
+    "B05": "https://encrypted-tbn3.gstatic.com/images?q=tbn:ANd9GcRmwMXH-WhrwYDhi3iBqyr2jgEIYu2H3p3szDQAe69OdRZw2c4L",
+    "R01": "https://encrypted-tbn1.gstatic.com/images?q=tbn:ANd9GcT60yi3ccVhfBsXC-AwdZt1olc23xQQ_O-mVE39KcXBgFprBMvX",
+    "R02": "https://lentillovingfamily.com/wp-content/uploads/2025/08/jeera-rice-1.jpg",
+    "R03": "https://www.cubesnjuliennes.com/wp-content/uploads/2018/08/easy-zafrani-pulao.jpg",
+    "D01": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRZkxBv6fF_co9NWR5QdDbYdn9GeI6BsoIVwQ&s",
+    "D02": "https://heygrillhey.com/wp-content/uploads/2016/08/DarkChocolateCaramelBrownies-9-1024x683.jpg",
+    "D03": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR1qaiQwm3oD69PVQ4xyTrIYdP7pmb0hvd9fg&s",
+    "BV01": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTZSN-4gCIBidVIdKWMbdQ9WwPZ1_L6Jdu6uC4dGpWfvkvUQORu_dfc73bbTSupmyYCigu8moUV_qfnJ5KE4RW5xDL_2SvbeNQtXfp5EA&s=10",
+    "BV02": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSqI-OkqueI6TYqRETquHMeKM-iLxEin3d2JQ&s",
+    "BV03": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTFpRGVWgownVY1dSYMy7XezSeSSaqHaTz58Q&s",
+    "BV04": "https://www.dhampurgreen.com/cdn/shop/files/76080679-1cdc-451d-96e8-864a495df78e.webp?v=1774436750",
+    "BV05": "https://mytastycurry.com/wp-content/uploads/2020/04/Cafe-style-cold-coffee-with-icecream.jpg",
+    "BV06": "https://m.media-amazon.com/images/I/61u0Ot8PIOL._AC_UF894,1000_QL80_.jpg",
+}
+
 
 MENU = {
     "starters": [

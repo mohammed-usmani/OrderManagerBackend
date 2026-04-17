@@ -1,0 +1,42 @@
+# Menu image URLs — paste a direct image URL (https://…/something.jpg) after the `= ` for each dish.
+# Blank lines and lines starting with `#` are ignored.
+# I'll read this file and update IMAGE_URLS in agent/restaurant/menu.py.
+
+# STARTERS
+S01  Tandoori Paneer Tikka         = https://www.jcookingodyssey.com/wp-content/uploads/2025/07/tandoori-paneer-tikka.jpg
+S02  Lamb Galouti Kebab            = https://cdn.meatigo.com/fit-in/651x552/product/1774507134478_128_26082022_Mutton_Galouti_Kebab
+S03  Dynamite Prawns               = https://dinnerthendessert.com/wp-content/uploads/2019/02/Dynamite-Shrimp-1048x699.jpg
+S04  Smoked Beetroot Hummus        = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRTUsFrRlZSNhLbz2NaeluUH28xmyqX3glb7A&s
+
+# MAINS
+M01  Butter Chicken                = https://sugarspunrun.com/wp-content/uploads/2025/04/Butter-chicken-1-of-1.jpg
+M02  Rogan Josh                    = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ9i0_mIQiugdza8foHQ4nbXk3aZtstphJ4XmUfqah0hdnKPix6MObQ0tYOaAursG8MXkbReM53qxd1UsP1GuPX4YbD6HAp3ehIroraMpk&s=10
+M03  Dal Makhani                   = https://www.cookwithmanali.com/wp-content/uploads/2019/04/Restaurant-Style-Dal-Makhani-500x500.jpg
+M04  Hyderabadi Chicken Biryani    = https://www.cookwithkushi.com/wp-content/uploads/2023/10/best_simple_easy_chicken_dum_biryani.jpg
+M05  Paneer Lababdar               = https://www.mygingergarlickitchen.com/wp-content/rich-markup-images/1x1/1x1-paneer-lababdar.jpg
+M06  Grilled Sea Bass              = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxJ9wBsb3SIbPoIx0cz3fimI4nVytblzwFAw&s
+
+# BREADS
+B01  Butter Naan                   = https://www.pachakam.com/wp-content/uploads/2009/05/new-butter-naan-500x375.jpg
+B02  Garlic Naan                   = https://www.supergoldenbakes.com/wordpress/wp-content/uploads/2025/09/Garlic_Naan-8.jpg
+B03  Laccha Paratha                = https://myfoodstory.com/wp-content/uploads/2022/08/Homemade-Lachha-Paratha-3-500x500.jpg
+B04  Tandoori Roti                 = https://www.cookwithmanali.com/wp-content/uploads/2021/07/Tandoori-Roti.jpg
+B05  Cheese Naan                   = https://encrypted-tbn3.gstatic.com/images?q=tbn:ANd9GcRmwMXH-WhrwYDhi3iBqyr2jgEIYu2H3p3szDQAe69OdRZw2c4L
+
+# RICE
+R01  Steamed Basmati               = https://encrypted-tbn1.gstatic.com/images?q=tbn:ANd9GcT60yi3ccVhfBsXC-AwdZt1olc23xQQ_O-mVE39KcXBgFprBMvX
+R02  Jeera Rice                    = https://lentillovingfamily.com/wp-content/uploads/2025/08/jeera-rice-1.jpg
+R03  Saffron Pulao                 = https://www.cubesnjuliennes.com/wp-content/uploads/2018/08/easy-zafrani-pulao.jpg
+
+# DESSERTS
+D01  Gulab Jamun Cheesecake        = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRZkxBv6fF_co9NWR5QdDbYdn9GeI6BsoIVwQ&s
+D02  Smoked Chocolate Brownie      = https://heygrillhey.com/wp-content/uploads/2016/08/DarkChocolateCaramelBrownies-9-1024x683.jpg
+D03  Mango Phirni                  = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR1qaiQwm3oD69PVQ4xyTrIYdP7pmb0hvd9fg&s
+
+# BEVERAGES
+BV01 Masala Chai                   = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTZSN-4gCIBidVIdKWMbdQ9WwPZ1_L6Jdu6uC4dGpWfvkvUQORu_dfc73bbTSupmyYCigu8moUV_qfnJ5KE4RW5xDL_2SvbeNQtXfp5EA&s=10
+BV02 Fresh Lime Soda               = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSqI-OkqueI6TYqRETquHMeKM-iLxEin3d2JQ&s
+BV03 Mango Lassi                   = https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTFpRGVWgownVY1dSYMy7XezSeSSaqHaTz58Q&s
+BV04 Rose Sharbat                  = https://www.dhampurgreen.com/cdn/shop/files/76080679-1cdc-451d-96e8-864a495df78e.webp?v=1774436750
+BV05 Cold Coffee                   = https://mytastycurry.com/wp-content/uploads/2020/04/Cafe-style-cold-coffee-with-icecream.jpg
+BV06 Bottled Water                 = https://m.media-amazon.com/images/I/61u0Ot8PIOL._AC_UF894,1000_QL80_.jpg

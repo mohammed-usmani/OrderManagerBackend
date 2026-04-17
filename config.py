@@ -11,7 +11,7 @@ VOICE_ID = os.environ["VOICE_ID"]
 # Gemini Live Native Audio (feature branch)
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 GEMINI_MODEL = os.environ.get(
-    "GEMINI_MODEL", "models/gemini-2.5-flash-native-audio-preview-12-2025"
+    "GEMINI_MODEL", "models/gemini-3.1-flash-live-preview"
 )
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 
@@ -24,3 +24,11 @@ JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 
 ADMIN_EMAIL = os.environ["ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
+
+# Restaurant bill policy. Service charge + GST are quoted by the agent and
+# displayed on every cart/order card sent to the frontend. Keep in sync with
+# the "Restaurant Policies" section of agent/brain.py.
+BILL_CHARGES: list[dict] = [
+    {"label": "Service charge (10%)", "rate": 0.10},
+    {"label": "GST (5%)", "rate": 0.05},
+]

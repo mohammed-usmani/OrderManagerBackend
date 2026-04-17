@@ -25,6 +25,31 @@ class MenuService:
     def find_by_name(self, query: str) -> list[MenuItem]:
         return self.repo.find_by_name(query)
 
+    def search(self, query: str) -> list[MenuItem]:
+        """Smart keyword search: tokens match across name, description,
+        taste profile, preparation notes, category, spice level, and dietary
+        tags. Ranked by hit count."""
+        return self.repo.search_keywords(query)
+
+    def filter(
+        self,
+        *,
+        category: str | None = None,
+        dietary: list[str] | None = None,
+        spice_level: str | None = None,
+        max_price: float | None = None,
+        keyword: str | None = None,
+    ) -> list[MenuItem]:
+        """AND-filter items by any combination of category, dietary tags,
+        spice level, max price, or keyword."""
+        return self.repo.filter_items(
+            category=category,
+            dietary=dietary,
+            spice_level=spice_level,
+            max_price=max_price,
+            keyword=keyword,
+        )
+
     def create_item(self, **kwargs) -> MenuItem:
         return self.repo.create(**kwargs)
 
