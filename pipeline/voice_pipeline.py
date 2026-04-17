@@ -1,9 +1,14 @@
 """Voice pipeline factory: creates a Pipecat pipeline per WebSocket connection.
 
-Voice-only. Each tool:
+Gemini Live Native Audio variant: Gemini handles STT + LLM + TTS natively, so
+the pipeline is just `transport.input -> user -> gemini -> transport.output
+-> assistant`.
+
+Each tool:
   1. Fetches structured data from the DB.
   2. Pushes a UI event (OutputTransportMessageUrgentFrame) to the client so
-     the frontend can render cards.
+     the frontend can render cards. Gemini's FrameProcessor forwards unknown
+     frames downstream, so this still reaches the transport unchanged.
   3. Returns a short text summary for the LLM to narrate.
 """
 
@@ -22,6 +27,8 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
+from pipecat.services.google.gemini_live import GeminiLiveLLMService
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMSettings
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
@@ -29,17 +36,14 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 from agent.brain import SYSTEM_PROMPT, build_time_context_message
-from config import GROQ_API_KEY, MISTRAL_API_KEY, VOICE_ID
+from config import GEMINI_MODEL, GEMINI_VOICE, GOOGLE_API_KEY
 from db.base import get_session
 from db.repositories.menu_repo import MenuRepo
-from pipeline.fallback_llm import FallbackLLMService
 from pipeline.ui_events import (
     menu_item_to_card,
     order_to_card,
     push_ui_event,
 )
-from pipeline.voxtral_stt import VoxtralSTTService
-from pipeline.voxtral_tts import VoxtralTTSService
 from services.menu_service import MenuService
 from services.order_service import OrderService
 
@@ -399,59 +403,64 @@ def create_pipeline(
     user_id: str = None,
     user_timezone: str | None = None,
 ):
-    """Create a fresh voice pipeline for a single client connection."""
+    """Create a fresh Gemini Live Native Audio pipeline per connection."""
+    if not GOOGLE_API_KEY:
+        raise RuntimeError(
+            "GOOGLE_API_KEY not set — required for Gemini Live Native Audio. "
+            "Get a key from https://aistudio.google.com/ and put it in .env."
+        )
+
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_out_sample_rate=24000,  # Gemini Live emits 24 kHz mono PCM16
+            audio_out_channels=1,
             serializer=ProtobufFrameSerializer(),
         ),
     )
 
-    stt = VoxtralSTTService(api_key=MISTRAL_API_KEY)
-
+    # Fresh per-connection time context prepended to the base prompt.
     system_instruction = (
         build_time_context_message(user_timezone) + "\n\n" + SYSTEM_PROMPT
     )
 
-    llm = FallbackLLMService(
-        api_key=MISTRAL_API_KEY,
-        groq_api_key=GROQ_API_KEY,
-        groq_model="llama-3.3-70b-versatile",
-        settings=FallbackLLMService.Settings(
-            model="mistral-large-latest",
-            system_instruction=system_instruction,
+    # Collect tool schemas up front so we can pass them to Gemini at connect time.
+    tool_fns = _make_tool_wrappers(user_id or "", user_timezone)
+    tool_schemas = [DirectFunctionWrapper(f).to_function_schema() for f in tool_fns]
+    tools = ToolsSchema(standard_tools=tool_schemas)
+
+    llm = GeminiLiveLLMService(
+        api_key=GOOGLE_API_KEY,
+        system_instruction=system_instruction,
+        tools=tools,
+        settings=GeminiLiveLLMSettings(
+            model=GEMINI_MODEL,
+            voice=GEMINI_VOICE,
+            language="en-US",
         ),
     )
 
-    tool_fns = _make_tool_wrappers(user_id or "", user_timezone)
-    tool_schemas = []
     for tool_fn in tool_fns:
         llm.register_direct_function(tool_fn)
-        wrapper = DirectFunctionWrapper(tool_fn)
-        tool_schemas.append(wrapper.to_function_schema())
 
-    tts = VoxtralTTSService(api_key=MISTRAL_API_KEY, voice_id=VOICE_ID)
-
-    context = LLMContext()
-    context.set_tools(ToolsSchema(standard_tools=tool_schemas))
-    context_pair = LLMContextAggregatorPair(
+    # Universal context + aggregator (new API; the service's
+    # create_context_aggregator helper is deprecated in 0.0.108).
+    # VAD lives on the user aggregator per Pipecat's new convention.
+    context = LLMContext(tools=tools)
+    agg = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(),
-        ),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
     pipeline = Pipeline(
         [
             transport.input(),
-            stt,
-            context_pair.user(),
+            agg.user(),
             llm,
-            tts,
             transport.output(),
-            context_pair.assistant(),
+            agg.assistant(),
         ]
     )
 
