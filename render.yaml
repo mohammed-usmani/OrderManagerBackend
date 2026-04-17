@@ -1,0 +1,44 @@
+# Render infrastructure-as-code.
+# See https://render.com/docs/blueprint-spec.
+#
+# Apply this blueprint from the Render dashboard (New → Blueprint) pointed at
+# this repo. Secrets (API keys, DB URL, JWT, admin email/password) stay set
+# `sync: false` so Render asks you to fill them once per environment — they
+# never live in git.
+
+services:
+  - type: web
+    name: saffron-smoke-api
+    runtime: python
+    plan: free
+    rootDir: server
+    # Build: install uv itself, then sync project dependencies.
+    buildCommand: |
+      pip install uv
+      uv sync --frozen
+    # Run: MUST bind to $PORT and 0.0.0.0 — Render scans for the port
+    # after startup and will kill the process (exit 3) if it can't reach it.
+    startCommand: uv run uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Fill these in Render → Environment on first deploy.
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: VOICE_ID
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: JWT_EXPIRE_DAYS
+        value: "7"
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

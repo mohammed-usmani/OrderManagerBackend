@@ -45,6 +45,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Lightweight health check — used by the frontend's "backend waking up"
+# gate when we're on Render's free plan (cold-starts take ~50 s). No auth,
+# no DB, no external calls — just confirms the process is serving.
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # REST routers (no text chat)
 app.include_router(auth.router)
 app.include_router(menu.router)
@@ -93,4 +101,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, log_level="info")
+    import os
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
