@@ -1,5 +1,6 @@
 """Auth service: JWT creation/validation and Redis-backed WS tickets."""
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -32,18 +33,32 @@ class AuthService:
         except JWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
-    def issue_ws_ticket(self, user_id: str) -> str:
+    def issue_ws_ticket(self, user_id: str, timezone: str | None = None) -> str:
+        """Issue a single-use WS ticket carrying user_id and optional timezone.
+
+        Payload is JSON so we can extend it without breaking existing tickets.
+        """
         ticket = str(uuid.uuid4())
-        self.redis.setex(f"ticket:{ticket}", 30, user_id.encode())
+        payload = json.dumps({"user_id": user_id, "timezone": timezone})
+        self.redis.setex(f"ticket:{ticket}", 30, payload.encode())
         return ticket
 
-    def consume_ws_ticket(self, ticket: str) -> str | None:
+    def consume_ws_ticket(self, ticket: str) -> dict | None:
+        """Consume a WS ticket, returning {user_id, timezone} or None."""
         key = f"ticket:{ticket}"
         value = self.redis.get(key)
         if value is None:
             return None
         self.redis.delete(key)
-        return value.decode() if isinstance(value, bytes) else value
+        raw = value.decode() if isinstance(value, bytes) else value
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and "user_id" in data:
+                return data
+        except (ValueError, TypeError):
+            pass
+        # Back-compat: old tickets stored the raw user_id string.
+        return {"user_id": raw, "timezone": None}
 
 
 # Module-level singleton for use outside FastAPI DI (e.g. dependencies.py)

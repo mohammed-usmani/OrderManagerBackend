@@ -72,6 +72,7 @@ def get_agents():
 class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
+    timezone: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -111,7 +112,8 @@ async def chat_endpoint(
     agent, fallback = get_agents()
     response_text = await invoke_agent(
         agent, fallback, req.message, thread_id,
-        user_id=user_id, prior_messages=prior_messages
+        user_id=user_id, prior_messages=prior_messages,
+        user_timezone=req.timezone,
     )
 
     # Persist messages
@@ -133,15 +135,20 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4001)
         return
 
-    user_id = auth_service.consume_ws_ticket(ticket)
-    if not user_id:
+    payload = auth_service.consume_ws_ticket(ticket)
+    if not payload:
         await websocket.close(code=4001)
         return
 
-    await websocket.accept()
-    logger.info(f"Voice client connected: {websocket.client} user={user_id}")
+    user_id = payload["user_id"]
+    user_timezone = payload.get("timezone")
 
-    pipeline = create_pipeline(websocket, user_id=user_id)
+    await websocket.accept()
+    logger.info(
+        f"Voice client connected: {websocket.client} user={user_id} tz={user_timezone}"
+    )
+
+    pipeline = create_pipeline(websocket, user_id=user_id, user_timezone=user_timezone)
     task = PipelineTask(pipeline)
     runner = PipelineRunner(handle_sigint=False)
 
@@ -150,4 +157,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8765, log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, log_level="info")

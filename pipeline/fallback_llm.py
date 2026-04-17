@@ -1,7 +1,9 @@
-"""Fallback LLM service: Groq primary, NVIDIA NIM secondary.
+"""Fallback LLM service: Mistral primary, Groq secondary.
 
-If Groq returns a rate limit error (429), automatically retries the
-same request against NVIDIA NIM's OpenAI-compatible API.
+Tries Mistral first (strong tool-use). On a rate-limit error, falls back to
+Groq's Llama for a cooldown window, then retries Mistral. Groq's OpenAI-
+compatible endpoint is called directly via the openai client so we don't
+drag in a second Pipecat LLM stack.
 """
 
 import time
@@ -10,72 +12,74 @@ from loguru import logger
 from openai import AsyncOpenAI, RateLimitError
 
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
-from pipecat.services.groq.llm import GroqLLMService
+from pipecat.services.llm_service import FunctionCallRunnerItem
+from pipecat.services.mistral.llm import MistralLLMService
 
 
-class FallbackLLMService(GroqLLMService):
-    """Groq LLM with automatic fallback to NVIDIA NIM on rate limit."""
+class FallbackLLMService(MistralLLMService):
+    """Mistral LLM with automatic fallback to Groq on rate limit."""
 
     def __init__(
         self,
         *,
         api_key: str,
-        nvidia_api_key: str,
-        nvidia_model: str = "meta/llama-3.3-70b-instruct",
-        nvidia_base_url: str = "https://integrate.api.nvidia.com/v1",
+        groq_api_key: str,
+        groq_model: str = "llama-3.3-70b-versatile",
+        groq_base_url: str = "https://api.groq.com/openai/v1",
         fallback_cooldown: float = 60.0,
         **kwargs,
     ):
         """Initialize the fallback LLM service.
 
         Args:
-            api_key: Groq API key (primary).
-            nvidia_api_key: NVIDIA NIM API key (fallback).
-            nvidia_model: Model to use on NVIDIA NIM.
-            nvidia_base_url: NVIDIA NIM API base URL.
-            fallback_cooldown: Seconds to stay on fallback before retrying Groq.
-            **kwargs: Additional args passed to GroqLLMService.
+            api_key: Mistral API key (primary).
+            groq_api_key: Groq API key (fallback).
+            groq_model: Model to use on Groq.
+            groq_base_url: Groq's OpenAI-compatible base URL.
+            fallback_cooldown: Seconds to stay on fallback before retrying Mistral.
+            **kwargs: Additional args passed to MistralLLMService.
         """
         super().__init__(api_key=api_key, **kwargs)
 
-        self._nvidia_client = AsyncOpenAI(
-            api_key=nvidia_api_key,
-            base_url=nvidia_base_url,
+        self._groq_client = AsyncOpenAI(
+            api_key=groq_api_key,
+            base_url=groq_base_url,
         )
-        self._nvidia_model = nvidia_model
+        self._groq_model = groq_model
         self._fallback_cooldown = fallback_cooldown
         self._using_fallback = False
         self._fallback_until = 0.0
 
+    async def _run_function_call(self, runner_item: FunctionCallRunnerItem):
+        # Pipecat's stream parser yields None when the LLM calls a no-arg tool.
+        # DirectFunctionWrapper.invoke then does `**None` and crashes. Normalize
+        # to an empty dict so the downstream **args unpack works.
+        if runner_item.arguments is None:
+            runner_item.arguments = {}
+        return await super()._run_function_call(runner_item)
+
     async def get_chat_completions(self, params_from_context: OpenAILLMInvocationParams):
-        """Get chat completions with automatic Groq -> NVIDIA NIM fallback.
-
-        If currently in fallback cooldown, goes directly to NVIDIA NIM.
-        Otherwise tries Groq first, falls back on RateLimitError.
-        """
-        # If we're in fallback cooldown, go straight to NVIDIA NIM
+        """Try Mistral first, fall back to Groq on rate limits."""
+        # In fallback cooldown → go straight to Groq
         if self._using_fallback and time.monotonic() < self._fallback_until:
-            return await self._nvidia_completions(params_from_context)
+            return await self._groq_completions(params_from_context)
 
-        # Cooldown expired, try Groq again
         if self._using_fallback:
             self._using_fallback = False
-            logger.info("Fallback cooldown expired, switching back to Groq")
+            logger.info("Fallback cooldown expired, switching back to Mistral")
 
         try:
             return await super().get_chat_completions(params_from_context)
         except RateLimitError as e:
-            logger.warning(f"Groq rate limited: {e}. Falling back to NVIDIA NIM")
+            logger.warning(f"Mistral rate limited: {e}. Falling back to Groq")
             self._using_fallback = True
             self._fallback_until = time.monotonic() + self._fallback_cooldown
-            return await self._nvidia_completions(params_from_context)
+            return await self._groq_completions(params_from_context)
 
-    async def _nvidia_completions(self, params_from_context: OpenAILLMInvocationParams):
-        """Make a chat completion request against NVIDIA NIM."""
+    async def _groq_completions(self, params_from_context: OpenAILLMInvocationParams):
+        """Make a chat completion request against Groq."""
         params = self.build_chat_completion_params(params_from_context)
-        # Override model for NVIDIA
-        params["model"] = self._nvidia_model
+        params["model"] = self._groq_model
 
-        logger.debug(f"{self}: Using NVIDIA NIM fallback ({self._nvidia_model})")
-        chunks = await self._nvidia_client.chat.completions.create(**params)
-        return chunks
+        logger.debug(f"{self}: Using Groq fallback ({self._groq_model})")
+        return await self._groq_client.chat.completions.create(**params)

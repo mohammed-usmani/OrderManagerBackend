@@ -12,6 +12,7 @@ from loguru import logger
 from mistralai.client import Mistral
 
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
+from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.utils.time import time_now_iso8601
 
@@ -39,7 +40,10 @@ class VoxtralSTTService(SegmentedSTTService):
             language: Language code for transcription.
             **kwargs: Additional arguments passed to SegmentedSTTService.
         """
-        super().__init__(**kwargs)
+        super().__init__(
+            settings=STTSettings(model=model, language=language),
+            **kwargs,
+        )
         self._client = Mistral(api_key=api_key)
         self._model = model
         self._language = language

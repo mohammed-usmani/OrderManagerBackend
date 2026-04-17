@@ -28,6 +28,10 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class TicketRequest(BaseModel):
+    timezone: str | None = None
+
+
 class TicketResponse(BaseModel):
     ticket: str
 
@@ -57,6 +61,10 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/ws-ticket", response_model=TicketResponse)
-def ws_ticket(current_user=Depends(get_current_user)):
-    ticket = auth_service.issue_ws_ticket(current_user.id)
+def ws_ticket(
+    req: TicketRequest | None = None,
+    current_user=Depends(get_current_user),
+):
+    timezone = req.timezone if req else None
+    ticket = auth_service.issue_ws_ticket(current_user.id, timezone=timezone)
     return TicketResponse(ticket=ticket)

@@ -4,6 +4,9 @@ Tools use user_id from LangGraph configurable (injected via RunnableConfig).
 DB operations go through OrderService and MenuService.
 """
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
@@ -11,12 +14,35 @@ from db.base import get_session
 from services.menu_service import MenuService
 from services.order_service import OrderService
 
+RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
+
 
 def _get_user_id(config: RunnableConfig) -> str:
     user_id = (config or {}).get("configurable", {}).get("user_id")
     if not user_id:
         raise ValueError("user_id not found in agent config — are you authenticated?")
     return user_id
+
+
+def _get_display_tz(config: RunnableConfig) -> ZoneInfo:
+    """Return the customer's timezone if known, otherwise restaurant IST."""
+    name = (config or {}).get("configurable", {}).get("user_timezone")
+    if name:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return RESTAURANT_TZ
+
+
+def _format_dt(dt: datetime | None, tz: ZoneInfo) -> str:
+    """Render a naive-UTC datetime from the DB in the given timezone."""
+    if dt is None:
+        return "unknown"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(tz)
+    return local.strftime("%b %d, %I:%M %p %Z")
 
 
 @tool
@@ -116,8 +142,70 @@ def add_to_order(
 
 
 @tool
+def search_my_orders(
+    status: str = "",
+    limit: int = 5,
+    config: RunnableConfig = None,
+) -> str:
+    """Search the customer's past orders, optionally filtered by status.
+
+    Use this when the customer asks about their order history, past orders,
+    or wants to know e.g. "how many confirmed orders do I have?". For the
+    CURRENT in-progress cart only, use view_order instead.
+
+    Args:
+        status: Optional status filter. One of: "cart", "confirmed",
+            "awaiting_payment", "paid", "cancelled". Leave empty to count
+            across all statuses and return a summary.
+        limit: Maximum number of matching orders to return details for
+            (default 5). Counts are always returned in full.
+    """
+    user_id = _get_user_id(config)
+    tz = _get_display_tz(config)
+    status = (status or "").strip().lower()
+    valid = {"cart", "confirmed", "awaiting_payment", "paid", "cancelled"}
+    if status and status not in valid:
+        return f"Unknown status '{status}'. Valid: {', '.join(sorted(valid))}."
+
+    with get_session() as db:
+        service = OrderService(db)
+        all_orders = service.get_orders(user_id)
+        if not all_orders:
+            return "You don't have any orders yet."
+
+        # Build status counts once — cheap and useful context for the LLM.
+        counts: dict[str, int] = {}
+        for o in all_orders:
+            counts[o.status] = counts.get(o.status, 0) + 1
+        summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+
+        matches = [o for o in all_orders if not status or o.status == status]
+        if not matches:
+            return f"Summary: {summary}. No orders with status '{status}'."
+
+        header = (
+            f"Summary across all orders: {summary}.\n"
+            f"Showing {min(limit, len(matches))} of {len(matches)} "
+            f"{status or 'total'} order(s):"
+        )
+        lines = [header]
+        for o in matches[:limit]:
+            short = o.id[:8]
+            item_count = sum(i.quantity for i in o.items)
+            total = sum(float(i.price_at_order) * i.quantity for i in o.items)
+            created = _format_dt(o.created_at, tz)
+            lines.append(
+                f"  • #{short} — {o.status} — {item_count} item(s) — ₹{total} — placed {created}"
+            )
+    return "\n".join(lines)
+
+
+@tool
 def view_order(config: RunnableConfig = None) -> str:
-    """View your current order."""
+    """View your current in-progress cart (items not yet confirmed).
+
+    For historical orders (past / confirmed / cancelled), use list_my_orders instead.
+    """
     user_id = _get_user_id(config)
     with get_session() as db:
         service = OrderService(db)

@@ -1,5 +1,6 @@
 """MenuItem repository."""
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from db.models.menu import MenuItem
@@ -19,11 +20,16 @@ class MenuRepo:
         return q.order_by(MenuItem.category, MenuItem.id).all()
 
     def find_by_name(self, query: str) -> list[MenuItem]:
-        return (
-            self.db.query(MenuItem)
-            .filter(MenuItem.name.ilike(f"%{query}%"))
-            .all()
-        )
+        """Match any whitespace-separated token against the name.
+
+        "chicken tikka" matches both "Butter Chicken" and
+        "Tandoori Paneer Tikka" instead of requiring the full phrase.
+        """
+        tokens = [t for t in query.strip().split() if t]
+        if not tokens:
+            return []
+        conditions = [MenuItem.name.ilike(f"%{t}%") for t in tokens]
+        return self.db.query(MenuItem).filter(or_(*conditions)).all()
 
     def create(self, **kwargs) -> MenuItem:
         item = MenuItem(**kwargs)

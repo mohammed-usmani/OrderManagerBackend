@@ -48,6 +48,30 @@ def list_sessions(
     ]
 
 
+@router.get("/sessions/active", response_model=ChatSessionResponse | None)
+def get_active_session(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return the user's currently active chat session + messages, or null."""
+    session = ChatService(db).get_active_session(current_user.id)
+    if not session:
+        return None
+    messages = [
+        ChatMessageResponse(
+            id=m.id, role=m.role, content=m.content, created_at=m.created_at.isoformat()
+        )
+        for m in session.messages
+    ]
+    return ChatSessionResponse(
+        id=session.id,
+        order_id=session.order_id,
+        status=session.status,
+        created_at=session.created_at.isoformat(),
+        messages=messages,
+    )
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
 def get_session(
     session_id: str,
