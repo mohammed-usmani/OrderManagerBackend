@@ -2,7 +2,6 @@
 
 from datetime import datetime
 
-from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from db.models.chat import ChatMessage, ChatSession
@@ -28,18 +27,6 @@ class ChatService:
 
     def get_history(self, session_id: str) -> list[ChatMessage]:
         return self.repo.get_messages(session_id)
-
-    def get_history_as_langchain_messages(self, session_id: str):
-        """Convert DB messages to LangChain message objects for agent injection."""
-        messages = self.repo.get_messages(session_id)
-        result = []
-        for msg in messages:
-            if msg.role == "user":
-                result.append(HumanMessage(content=msg.content))
-            elif msg.role == "assistant":
-                result.append(AIMessage(content=msg.content))
-            # skip tool messages — not needed for context replay
-        return result
 
     def close_session(self, session_id: str) -> None:
         session = self.repo.get_session_by_id(session_id)

@@ -33,20 +33,6 @@ def test_save_and_retrieve_messages(db):
     assert history[1].content == "Of course!"
 
 
-def test_get_history_as_langchain_messages(db):
-    user, _ = _make_user_and_cart(db)
-    service = ChatService(db)
-    session = service.get_active_session(user.id)
-    service.save_message(session.id, "user", "Hello")
-    service.save_message(session.id, "assistant", "Hi there")
-
-    messages = service.get_history_as_langchain_messages(session.id)
-    assert len(messages) == 2
-    from langchain_core.messages import HumanMessage, AIMessage
-    assert isinstance(messages[0], HumanMessage)
-    assert isinstance(messages[1], AIMessage)
-
-
 def test_close_session(db):
     user, _ = _make_user_and_cart(db)
     service = ChatService(db)

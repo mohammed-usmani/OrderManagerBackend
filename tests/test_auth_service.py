@@ -24,12 +24,22 @@ def test_decode_invalid_token_raises(auth_service):
 
 
 def test_issue_and_consume_ws_ticket(auth_service):
-    auth_service.redis.get.return_value = b"user-123"
-    ticket = auth_service.issue_ws_ticket("user-123")
+    import json
+    auth_service.redis.get.return_value = json.dumps(
+        {"user_id": "user-123", "timezone": "Asia/Kolkata"}
+    ).encode()
+    ticket = auth_service.issue_ws_ticket("user-123", timezone="Asia/Kolkata")
     assert ticket is not None
 
-    user_id = auth_service.consume_ws_ticket(ticket)
-    assert user_id == "user-123"
+    payload = auth_service.consume_ws_ticket(ticket)
+    assert payload == {"user_id": "user-123", "timezone": "Asia/Kolkata"}
+
+
+def test_consume_legacy_ticket_returns_user_id(auth_service):
+    # Back-compat: old tickets stored the raw user_id string.
+    auth_service.redis.get.return_value = b"user-legacy"
+    payload = auth_service.consume_ws_ticket("t")
+    assert payload == {"user_id": "user-legacy", "timezone": None}
 
 
 def test_consume_expired_ticket_returns_none(auth_service):
