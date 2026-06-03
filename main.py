@@ -103,14 +103,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
     user_timezone = payload.get("timezone")
     ip = _client_ip(websocket)
+    # Rate limit on the per-browser client id the frontend sends; fall back to
+    # IP only if it's missing (e.g. an older cached client).
+    session_id = websocket.query_params.get("cid") or ip
 
     await websocket.accept()
 
-    # Per-IP rate limiting (one active call + cooldown). We accept first so the
-    # browser receives a proper close code + reason it can show the visitor.
-    allowed, reason = session_gate(ip)
+    # Per-session rate limiting (one active call per browser + optional cooldown).
+    # We accept first so the browser gets a proper close code + reason to show.
+    allowed, reason = session_gate(session_id)
     if not allowed:
-        logger.info(f"Voice connect rate-limited for {ip}: {reason}")
+        logger.info(f"Voice connect rate-limited for session={session_id} ip={ip}: {reason}")
         # A WebSocket close reason is capped at 123 bytes by the protocol —
         # truncate so a long message can't raise "control frame too long".
         safe_reason = reason.encode("utf-8")[:120].decode("utf-8", "ignore")
@@ -187,7 +190,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await runner.run(task)
     finally:
         cap_task.cancel()
-        session_release(ip)
+        session_release(session_id)
     logger.info(f"Voice client disconnected: {ip}")
 
 
