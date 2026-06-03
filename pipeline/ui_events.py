@@ -68,6 +68,23 @@ def menu_item_to_card(item) -> dict:
     }
 
 
+def customer_to_card(customer) -> dict:
+    """Customer ORM → UI card dict (shown when the agent identifies a caller)."""
+    return {
+        "id": customer.id,
+        "code": customer.code,
+        "name": customer.name,
+        "phone": customer.phone,
+        "address_line": customer.address_line,
+        "area": customer.area,
+        "pincode": customer.pincode,
+        "landmark": customer.landmark,
+        "preferences": customer.preferences,
+        "allergies": customer.allergies,
+        "order_count": customer.order_count,
+    }
+
+
 def order_item_to_card(item, menu_repo) -> dict:
     """OrderItem ORM → UI line item."""
     menu_item = menu_repo.get_by_id(item.menu_item_id)

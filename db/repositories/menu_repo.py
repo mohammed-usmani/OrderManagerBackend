@@ -164,6 +164,59 @@ class MenuRepo:
         scored.sort(key=lambda si: (-si[0], si[1].category, si[1].id))
         return [i for _, i in scored]
 
+    def semantic_search(
+        self,
+        query_vec: list[float],
+        limit: int = 10,
+        include_unavailable: bool = False,
+    ) -> list[MenuItem]:
+        """Nearest dishes to a query embedding by cosine distance.
+
+        Rows without an embedding are skipped. Requires the pgvector column to
+        exist and be populated.
+        """
+        q = self.db.query(MenuItem).filter(MenuItem.embedding.isnot(None))
+        if not include_unavailable:
+            q = q.filter(MenuItem.available == True)  # noqa: E712
+        q = q.order_by(MenuItem.embedding.cosine_distance(query_vec)).limit(limit)
+        return q.all()
+
+    def hybrid_search(
+        self, query: str, limit: int = 10, include_unavailable: bool = False
+    ) -> list[MenuItem]:
+        """Blend keyword ranking with semantic similarity (reciprocal rank
+        fusion). Falls back to keyword-only when embeddings are unavailable."""
+        from services.embeddings import embed_text  # local import avoids cycle
+
+        keyword_hits = self.search_keywords(query, include_unavailable=include_unavailable)
+
+        semantic_hits: list[MenuItem] = []
+        query_vec = embed_text(query)
+        if query_vec is not None:
+            try:
+                semantic_hits = self.semantic_search(
+                    query_vec, limit=limit, include_unavailable=include_unavailable
+                )
+            except Exception:
+                semantic_hits = []
+
+        if not semantic_hits:
+            return keyword_hits[:limit] if limit else keyword_hits
+
+        # Reciprocal rank fusion (k=60 is the conventional constant).
+        K = 60
+        scores: dict[str, float] = {}
+        by_id: dict[str, MenuItem] = {}
+        for rank, item in enumerate(keyword_hits):
+            scores[item.id] = scores.get(item.id, 0.0) + 1.0 / (K + rank)
+            by_id[item.id] = item
+        for rank, item in enumerate(semantic_hits):
+            scores[item.id] = scores.get(item.id, 0.0) + 1.0 / (K + rank)
+            by_id[item.id] = item
+
+        ordered = sorted(by_id.values(), key=lambda i: -scores[i.id])
+        return ordered[:limit] if limit else ordered
+
     def filter_items(
         self,
         *,

@@ -47,16 +47,14 @@ def test_login_wrong_password(client):
     assert resp.status_code == 401
 
 
-def test_ws_ticket_requires_auth(client):
+def test_ws_ticket_is_public(client):
+    # The voice line is public — anyone can get a ticket without logging in.
     resp = client.post("/auth/ws-ticket")
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 200
+    assert "ticket" in resp.json()
 
 
-def test_ws_ticket_with_auth(client):
-    client.post("/auth/register", json={"email": "ws@test.com", "password": "pass", "name": "WS"})
-    login = client.post("/auth/login", json={"email": "ws@test.com", "password": "pass"})
-    token = login.json()["access_token"]
-
-    resp = client.post("/auth/ws-ticket", headers={"Authorization": f"Bearer {token}"})
+def test_ws_ticket_accepts_timezone(client):
+    resp = client.post("/auth/ws-ticket", json={"timezone": "Asia/Kolkata"})
     assert resp.status_code == 200
     assert "ticket" in resp.json()

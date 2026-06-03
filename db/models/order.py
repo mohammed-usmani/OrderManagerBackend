@@ -15,12 +15,29 @@ class Order(Base):
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    user_id: Mapped[str] = mapped_column(
-        String, ForeignKey("users.id"), nullable=False, index=True
+    # Legacy link to authenticated users — nullable now that the voice line is
+    # public. Parcel orders use customer_id instead.
+    user_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id"), nullable=True, index=True
     )
+    customer_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("customers.id"), nullable=True, index=True
+    )
+    order_type: Mapped[str] = mapped_column(
+        String, nullable=False, default="parcel"
+    )  # parcel (only type for now; kept extensible)
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="cart"
     )  # cart | confirmed | awaiting_payment | paid | cancelled
+
+    # Delivery snapshot, frozen onto the order at confirm time so it survives
+    # later edits to the customer record.
+    contact_name: Mapped[str | None] = mapped_column(String)
+    contact_phone: Mapped[str | None] = mapped_column(String)
+    delivery_address: Mapped[str | None] = mapped_column(Text)
+    delivery_area: Mapped[str | None] = mapped_column(String)
+    delivery_pincode: Mapped[str | None] = mapped_column(String)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

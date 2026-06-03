@@ -3,10 +3,12 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, Float, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from config import EMBEDDING_DIM
 from db.base import Base
 
 
@@ -27,6 +29,9 @@ class MenuItem(Base):
     popularity: Mapped[float | None] = mapped_column(Float)
     popularity_note: Mapped[str | None] = mapped_column(Text)
     image_url: Mapped[str | None] = mapped_column(Text)
+    # Semantic-search vector (mistral-embed, EMBEDDING_DIM dims). Nullable so
+    # rows without an embedding still work via keyword search.
+    embedding: Mapped[list | None] = mapped_column(Vector(EMBEDDING_DIM))
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False

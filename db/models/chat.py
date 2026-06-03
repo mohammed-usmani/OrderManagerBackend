@@ -15,8 +15,11 @@ class ChatSession(Base):
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )  # Also used as LangGraph thread_id
-    user_id: Mapped[str] = mapped_column(
-        String, ForeignKey("users.id"), nullable=False, index=True
+    user_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id"), nullable=True, index=True
+    )
+    customer_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("customers.id"), nullable=True, index=True
     )
     order_id: Mapped[str] = mapped_column(
         String, ForeignKey("orders.id"), nullable=False

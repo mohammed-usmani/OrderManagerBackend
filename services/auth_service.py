@@ -33,10 +33,13 @@ class AuthService:
         except JWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
-    def issue_ws_ticket(self, user_id: str, timezone: str | None = None) -> str:
-        """Issue a single-use WS ticket carrying user_id and optional timezone.
+    def issue_ws_ticket(
+        self, user_id: str | None = None, timezone: str | None = None
+    ) -> str:
+        """Issue a single-use WS ticket carrying optional timezone.
 
-        Payload is JSON so we can extend it without breaking existing tickets.
+        The voice line is public, so ``user_id`` is optional (anonymous parcel
+        callers). Payload is JSON so we can extend it without breaking tickets.
         """
         ticket = str(uuid.uuid4())
         payload = json.dumps({"user_id": user_id, "timezone": timezone})
@@ -44,7 +47,11 @@ class AuthService:
         return ticket
 
     def consume_ws_ticket(self, ticket: str) -> dict | None:
-        """Consume a WS ticket, returning {user_id, timezone} or None."""
+        """Consume a WS ticket, returning {user_id, timezone} or None.
+
+        Returns None only when the ticket is missing/expired — a valid
+        anonymous ticket returns {"user_id": None, "timezone": ...}.
+        """
         key = f"ticket:{ticket}"
         value = self.redis.get(key)
         if value is None:
@@ -53,8 +60,8 @@ class AuthService:
         raw = value.decode() if isinstance(value, bytes) else value
         try:
             data = json.loads(raw)
-            if isinstance(data, dict) and "user_id" in data:
-                return data
+            if isinstance(data, dict):
+                return {"user_id": data.get("user_id"), "timezone": data.get("timezone")}
         except (ValueError, TypeError):
             pass
         # Back-compat: old tickets stored the raw user_id string.

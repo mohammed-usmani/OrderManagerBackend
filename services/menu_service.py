@@ -4,6 +4,21 @@ from sqlalchemy.orm import Session
 
 from db.models.menu import MenuItem
 from db.repositories.menu_repo import MenuRepo
+from services.embeddings import embed_text, embed_texts, embeddings_enabled
+
+
+def menu_item_embedding_text(item: MenuItem) -> str:
+    """Compose the text we embed for semantic search of a dish."""
+    parts = [
+        item.name,
+        item.category,
+        item.spice_level,
+        " ".join(item.dietary) if item.dietary else None,
+        item.taste_profile,
+        item.description,
+        item.how_its_made,
+    ]
+    return " — ".join(p for p in parts if p)
 
 
 class MenuService:
@@ -26,10 +41,10 @@ class MenuService:
         return self.repo.find_by_name(query)
 
     def search(self, query: str) -> list[MenuItem]:
-        """Smart keyword search: tokens match across name, description,
-        taste profile, preparation notes, category, spice level, and dietary
-        tags. Ranked by hit count."""
-        return self.repo.search_keywords(query)
+        """Hybrid search: keyword ranking blended with semantic similarity
+        (pgvector). Falls back to keyword-only when embeddings are
+        unavailable."""
+        return self.repo.hybrid_search(query)
 
     def filter(
         self,
@@ -51,12 +66,16 @@ class MenuService:
         )
 
     def create_item(self, **kwargs) -> MenuItem:
-        return self.repo.create(**kwargs)
+        item = self.repo.create(**kwargs)
+        self._embed_item(item)
+        return item
 
     def update_item(self, item_id: str, **kwargs) -> MenuItem:
         item = self.repo.update(item_id, **kwargs)
         if not item:
             raise ValueError(f"Menu item '{item_id}' not found")
+        # Re-embed if any content field changed (cheap to always refresh).
+        self._embed_item(item)
         return item
 
     def disable_item(self, item_id: str) -> None:
@@ -65,3 +84,31 @@ class MenuService:
 
     def item_count(self) -> int:
         return self.repo.count()
+
+    # --- Embeddings ---
+
+    def _embed_item(self, item: MenuItem) -> None:
+        """Compute and store the dish's embedding. No-op if embeddings are off."""
+        if not embeddings_enabled():
+            return
+        vec = embed_text(menu_item_embedding_text(item))
+        if vec is not None:
+            item.embedding = vec
+            self.db.flush()
+
+    def reembed_all(self, only_missing: bool = False) -> int:
+        """(Re)generate embeddings for all items in one batch. Returns count
+        embedded. Safe no-op when embeddings are disabled."""
+        if not embeddings_enabled():
+            return 0
+        items = self.repo.list_all(include_unavailable=True)
+        targets = [i for i in items if not only_missing or i.embedding is None]
+        if not targets:
+            return 0
+        vecs = embed_texts([menu_item_embedding_text(i) for i in targets])
+        if vecs is None:
+            return 0
+        for item, vec in zip(targets, vecs):
+            item.embedding = vec
+        self.db.flush()
+        return len(targets)

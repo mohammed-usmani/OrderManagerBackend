@@ -34,8 +34,15 @@ class ChatRepo:
             .all()
         )
 
-    def create_session(self, user_id: str, order_id: str) -> ChatSession:
-        session = ChatSession(user_id=user_id, order_id=order_id)
+    def create_session(
+        self,
+        order_id: str,
+        user_id: str | None = None,
+        customer_id: str | None = None,
+    ) -> ChatSession:
+        session = ChatSession(
+            user_id=user_id, customer_id=customer_id, order_id=order_id
+        )
         self.db.add(session)
         self.db.flush()
         return session

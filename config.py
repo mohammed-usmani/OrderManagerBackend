@@ -3,12 +3,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-MISTRAL_API_KEY = os.environ["MISTRAL_API_KEY"]
-NVIDIA_API_KEY = os.environ["NVIDIA_API_KEY"]
-VOICE_ID = os.environ["VOICE_ID"]
+# Embeddings (semantic menu search) use MISTRAL_API_KEY; required for that
+# feature but search degrades to keyword-only if it's missing.
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 
-# Gemini Live Native Audio (feature branch)
+# Legacy / fallback-path keys — NOT used by the active Gemini Live pipeline.
+# Optional so deployments don't need to provide keys they'll never use.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+VOICE_ID = os.environ.get("VOICE_ID", "")
+
+# Gemini Live Native Audio — the active voice engine (STT + LLM + TTS in one).
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 GEMINI_MODEL = os.environ.get(
     "GEMINI_MODEL", "models/gemini-3.1-flash-live-preview"
@@ -17,6 +22,16 @@ GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+
+# Semantic menu search (pgvector + Mistral embeddings). mistral-embed is
+# 1024-dimensional. Embeddings degrade gracefully — if the API key/model is
+# missing or a call fails, search falls back to keyword matching.
+MISTRAL_EMBED_MODEL = os.environ.get("MISTRAL_EMBED_MODEL", "mistral-embed")
+EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "1024"))
+
+# Image upload (Cloudinary). When unset, the admin image-upload endpoint is
+# disabled and admins can still paste an image URL directly.
+CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
 
 JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 JWT_ALGORITHM = "HS256"

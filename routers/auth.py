@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.base import get_db
-from dependencies import get_current_user
 from services.auth_service import auth_service
 from services.user_service import UserService
 
@@ -61,10 +60,12 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/ws-ticket", response_model=TicketResponse)
-def ws_ticket(
-    req: TicketRequest | None = None,
-    current_user=Depends(get_current_user),
-):
+def ws_ticket(req: TicketRequest | None = None):
+    """Public — the voice line is open to anyone (anonymous parcel callers).
+
+    Issues a short-lived, single-use ticket carrying only the caller's
+    timezone. The caller is identified later, in-conversation, by the agent.
+    """
     timezone = req.timezone if req else None
-    ticket = auth_service.issue_ws_ticket(current_user.id, timezone=timezone)
+    ticket = auth_service.issue_ws_ticket(timezone=timezone)
     return TicketResponse(ticket=ticket)

@@ -1,0 +1,58 @@
+# Local backend stack for Saffron & Smoke (run from this server/ directory):
+#   docker compose up --build
+# Then point the frontend at http://localhost:8000 (its default) and open it.
+#
+# Host ports are shifted (5433 / 6380) so this won't clash with a Postgres or
+# Redis you may already run locally. The API still maps to 8000 so the existing
+# NEXT_PUBLIC_API_URL / NEXT_PUBLIC_WS_URL (localhost:8000) keep working.
+
+name: saffron-smoke
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: restaurant
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d restaurant"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: .
+    # API keys + secrets come from .env (this folder); the values below override
+    # the connection strings to point at the compose services (and set the port).
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/restaurant
+      REDIS_URL: redis://redis:6379
+      PORT: "8000"
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  pgdata:

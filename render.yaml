@@ -12,13 +12,16 @@ services:
     runtime: python
     plan: free
     rootDir: server
-    # Build: install uv itself, then sync project dependencies.
+    # Build: install uv, sync deps, then run DB migrations so tables exist
+    # before the app boots. Alembic reads DATABASE_URL from env — the
+    # Render build environment has access to the service's env vars.
     buildCommand: |
       pip install uv
       uv sync --frozen
-    # Run: MUST bind to $PORT and 0.0.0.0 — Render scans for the port
-    # after startup and will kill the process (exit 3) if it can't reach it.
-    startCommand: uv run uvicorn main:app --host 0.0.0.0 --port $PORT
+      uv run alembic upgrade head
+    # Run via main.py so Python reads PORT from the environment directly —
+    # avoids any shell-vs-exec `$PORT` expansion ambiguity with `uv run`.
+    startCommand: uv run python main.py
     healthCheckPath: /health
     envVars:
       # Fill these in Render → Environment on first deploy.
@@ -33,6 +36,14 @@ services:
       - key: NVIDIA_API_KEY
         sync: false
       - key: VOICE_ID
+        sync: false
+      # Semantic menu search (mistral-embed). Optional — falls back to keyword
+      # search if unset. Defaults to "mistral-embed".
+      - key: MISTRAL_EMBED_MODEL
+        value: mistral-embed
+      # Cloudinary image upload for menu photos. Optional — admins can paste an
+      # image URL if unset. Format: cloudinary://<key>:<secret>@<cloud-name>
+      - key: CLOUDINARY_URL
         sync: false
       - key: JWT_SECRET_KEY
         generateValue: true

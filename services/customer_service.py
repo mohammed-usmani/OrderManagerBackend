@@ -1,0 +1,123 @@
+"""Customer service: lookup, registration (with code allocation), updates."""
+
+import re
+
+from sqlalchemy.orm import Session
+
+from agent.restaurant.codes import generate_unique_code
+from db.models.customer import Customer
+from db.repositories.customer_repo import CustomerRepo
+
+
+def normalize_phone(raw: str | None) -> str | None:
+    """Reduce a spoken/typed phone to comparable digits.
+
+    Strips spaces, punctuation, a leading +91 / 91 / 0 (India) so "+91 98200
+    12345", "098200 12345" and "9820012345" all match. Returns None for blanks.
+    """
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None
+    if digits.startswith("91") and len(digits) == 12:
+        digits = digits[2:]
+    elif digits.startswith("0") and len(digits) == 11:
+        digits = digits[1:]
+    return digits
+
+
+# Fields a caller can set/amend on their record.
+EDITABLE_FIELDS = {
+    "name",
+    "address_line",
+    "area",
+    "pincode",
+    "landmark",
+    "preferences",
+    "allergies",
+    "notes",
+}
+
+
+class CustomerService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.repo = CustomerRepo(db)
+
+    def get_by_id(self, customer_id: str) -> Customer:
+        customer = self.repo.get_by_id(customer_id)
+        if not customer:
+            raise ValueError(f"Customer '{customer_id}' not found")
+        return customer
+
+    def lookup(self, code_or_phone: str) -> Customer | None:
+        """Resolve a returning customer by their 4-digit code or phone number."""
+        if not code_or_phone:
+            return None
+        token = code_or_phone.strip()
+
+        # A bare 4-digit token is almost certainly a code.
+        digits_only = re.sub(r"\D", "", token)
+        if len(digits_only) == 4:
+            found = self.repo.get_by_code(digits_only)
+            if found:
+                return found
+
+        # Otherwise try phone (normalized), then fall back to code.
+        phone = normalize_phone(token)
+        if phone:
+            found = self.repo.get_by_phone(phone)
+            if found:
+                return found
+        return self.repo.get_by_code(token)
+
+    def create_customer(
+        self,
+        *,
+        name: str | None = None,
+        phone: str | None = None,
+        address_line: str | None = None,
+        area: str | None = None,
+        pincode: str | None = None,
+        landmark: str | None = None,
+        preferences: str | None = None,
+        allergies: str | None = None,
+        notes: str | None = None,
+    ) -> Customer:
+        """Create a customer with a freshly allocated unique 4-digit code.
+
+        If the phone already belongs to a customer, returns that existing
+        record instead of creating a duplicate.
+        """
+        norm_phone = normalize_phone(phone)
+        if norm_phone:
+            existing = self.repo.get_by_phone(norm_phone)
+            if existing:
+                return existing
+
+        code = generate_unique_code(self.repo.code_exists)
+        return self.repo.create(
+            code=code,
+            phone=norm_phone,
+            name=name,
+            address_line=address_line,
+            area=area,
+            pincode=pincode,
+            landmark=landmark,
+            preferences=preferences,
+            allergies=allergies,
+            notes=notes,
+        )
+
+    def update_customer(self, customer_id: str, **fields) -> Customer:
+        clean = {k: v for k, v in fields.items() if k in EDITABLE_FIELDS and v is not None}
+        if "phone" in fields and fields["phone"] is not None:
+            clean["phone"] = normalize_phone(fields["phone"])
+        customer = self.repo.update(customer_id, **clean)
+        if not customer:
+            raise ValueError(f"Customer '{customer_id}' not found")
+        return customer
+
+    def search(self, query: str | None = None, limit: int = 100) -> list[Customer]:
+        return self.repo.search(query=query, limit=limit)

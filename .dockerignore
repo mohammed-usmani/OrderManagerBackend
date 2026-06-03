@@ -1,0 +1,20 @@
+# Keep the build context small and never bake secrets/venvs into the image.
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets: provided at runtime (compose env_file / Cloud Run env), not baked in.
+.env
+.env.*
+!.env.example
+
+# Dev / VCS noise
+.git/
+.gitignore
+tests/
+*.md
+.DS_Store

@@ -20,7 +20,7 @@ from pipecat.pipeline.task import PipelineTask
 from config import ADMIN_EMAIL, ADMIN_PASSWORD
 from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline
-from routers import admin, auth, menu, orders
+from routers import admin, auth, customers, menu, orders, service_areas
 from services.auth_service import auth_service
 
 
@@ -28,10 +28,24 @@ from services.auth_service import auth_service
 async def lifespan(app: FastAPI):
     # Seed data on startup
     with get_session() as db:
+        from db.seeds.areas_seed import seed_service_areas
         from db.seeds.menu_seed import seed_admin, seed_menu
         seed_menu(db)
         seed_admin(db, email=ADMIN_EMAIL, password=ADMIN_PASSWORD)
+        seed_service_areas(db)
         logger.info("Database seeded")
+
+    # Backfill semantic-search embeddings for any menu items missing them.
+    # Best-effort: never block startup if embeddings or the vector column are
+    # unavailable.
+    try:
+        with get_session() as db:
+            from services.menu_service import MenuService
+            embedded = MenuService(db).reembed_all(only_missing=True)
+            if embedded:
+                logger.info(f"Embedded {embedded} menu item(s) for semantic search")
+    except Exception as e:
+        logger.warning(f"Skipped embedding backfill: {e}")
 
     yield
 
@@ -58,6 +72,8 @@ app.include_router(auth.router)
 app.include_router(menu.router)
 app.include_router(orders.router)
 app.include_router(admin.router)
+app.include_router(customers.router)
+app.include_router(service_areas.router)
 
 
 # --- Voice WebSocket endpoint ---
@@ -75,15 +91,14 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4001)
         return
 
-    user_id = payload["user_id"]
     user_timezone = payload.get("timezone")
 
     await websocket.accept()
     logger.info(
-        f"Voice client connected: {websocket.client} user={user_id} tz={user_timezone}"
+        f"Voice client connected (anonymous parcel line): {websocket.client} tz={user_timezone}"
     )
 
-    pipeline = create_pipeline(websocket, user_id=user_id, user_timezone=user_timezone)
+    pipeline = create_pipeline(websocket, user_timezone=user_timezone)
     task = PipelineTask(pipeline)
 
     # Kick Gemini Live into a ready state. The service only becomes ready for

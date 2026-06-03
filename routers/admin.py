@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.base import get_db
+from db.models.customer import Customer
 from db.models.menu import MenuItem
 from db.models.order import Order, OrderItem
 from db.models.user import User
@@ -49,11 +50,17 @@ class AdminBillCharge(BaseModel):
 class AdminOrderResponse(BaseModel):
     id: str
     status: str
+    order_type: str
     created_at: datetime
     confirmed_at: datetime | None
     paid_at: datetime | None
     customer_email: str
     customer_name: str
+    customer_code: str | None
+    contact_phone: str | None
+    delivery_address: str | None
+    delivery_area: str | None
+    delivery_pincode: str | None
     item_count: int
     subtotal: float
     charges: list[AdminBillCharge]
@@ -72,7 +79,9 @@ _VALID_TRANSITIONS = {"awaiting_payment", "paid", "cancelled"}
 
 def _serialize_order(order, db) -> AdminOrderResponse:
     menu_service = MenuService(db)
-    customer = db.get(User, order.user_id)
+    # Parcel orders are tied to a Customer; legacy orders to a User.
+    parcel_customer = db.get(Customer, order.customer_id) if order.customer_id else None
+    user = db.get(User, order.user_id) if order.user_id else None
     items: list[AdminOrderItem] = []
     for oi in order.items:
         try:
@@ -93,14 +102,29 @@ def _serialize_order(order, db) -> AdminOrderResponse:
         )
     subtotal = sum(i.line_total for i in items)
     bill = compute_bill(subtotal)
+    # Prefer the snapshot frozen on the order at confirm time; fall back to the
+    # live customer record for in-progress carts.
+    contact_name = order.contact_name or (parcel_customer.name if parcel_customer else None)
+    contact_phone = order.contact_phone or (parcel_customer.phone if parcel_customer else None)
+    delivery_address = order.delivery_address or (parcel_customer.address_line if parcel_customer else None)
+    delivery_area = order.delivery_area or (parcel_customer.area if parcel_customer else None)
+    delivery_pincode = order.delivery_pincode or (parcel_customer.pincode if parcel_customer else None)
+    customer_name = contact_name or (user.name if user else "")
+
     return AdminOrderResponse(
         id=order.id,
         status=order.status,
+        order_type=order.order_type,
         created_at=order.created_at,
         confirmed_at=order.confirmed_at,
         paid_at=order.paid_at,
-        customer_email=customer.email if customer else "",
-        customer_name=customer.name if customer else "",
+        customer_email=user.email if user else "",
+        customer_name=customer_name or "",
+        customer_code=parcel_customer.code if parcel_customer else None,
+        contact_phone=contact_phone,
+        delivery_address=delivery_address,
+        delivery_area=delivery_area,
+        delivery_pincode=delivery_pincode,
         item_count=sum(i.quantity for i in items),
         subtotal=bill["subtotal"],
         charges=[AdminBillCharge(**c) for c in bill["charges"]],

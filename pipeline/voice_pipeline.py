@@ -4,6 +4,11 @@ Gemini Live Native Audio variant: Gemini handles STT + LLM + TTS natively, so
 the pipeline is just `transport.input -> user -> gemini -> transport.output
 -> assistant`.
 
+The line is PUBLIC and anonymous — there is no logged-in user. A caller is
+tied to a customer record only once the agent identifies them mid-call (via
+lookup_customer / register_customer); that identity lives in a per-connection
+CallSession the cart/order tools read from.
+
 Each tool:
   1. Fetches structured data from the DB.
   2. Pushes a UI event (OutputTransportMessageUrgentFrame) to the client so
@@ -36,18 +41,31 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 from agent.brain import SYSTEM_PROMPT, build_time_context_message
+from agent.session_state import CallSession
 from config import GEMINI_MODEL, GEMINI_VOICE, GOOGLE_API_KEY
 from db.base import get_session
+from db.repositories.customer_repo import CustomerRepo
 from db.repositories.menu_repo import MenuRepo
 from pipeline.ui_events import (
+    customer_to_card,
     menu_item_to_card,
     order_to_card,
     push_ui_event,
 )
+from services.customer_service import CustomerService
 from services.menu_service import MenuService
 from services.order_service import OrderService
+from services.service_area_service import ServiceAreaService
 
 RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
+
+# Returned by cart/order tools when the agent hasn't identified the caller yet.
+_NEED_CUSTOMER = (
+    "No customer is identified for this call yet. First ask whether they're a "
+    "returning customer (then call lookup_customer with their code or phone) or "
+    "new (collect name, phone, and full delivery address, then call "
+    "register_customer). Do not build an order until a customer is identified."
+)
 
 
 def _resolve_tz(name: str | None) -> ZoneInfo:
@@ -67,13 +85,11 @@ def _format_when(dt: datetime | None, tz: ZoneInfo) -> str:
     return dt.astimezone(tz).strftime("%b %d, %I:%M %p %Z")
 
 
-def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
+def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
     """Create Pipecat tool wrappers scoped to one WebSocket connection.
 
-    Each wrapper:
-      - does its DB work,
-      - pushes a UI event for the frontend,
-      - returns a short text summary that the LLM reads (and narrates).
+    Tools share a mutable `session`; once the caller is identified, the
+    cart/order tools operate on that customer's cart.
     """
     tz = _resolve_tz(user_timezone)
 
@@ -99,22 +115,20 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
     # --- Menu tools -------------------------------------------------------
 
     async def pc_search_menu(params: FunctionCallParams, query: str) -> None:
-        """Search the menu with freeform keywords.
+        """Search the menu with freeform keywords or intent.
 
-        Matches tokens in the query against dish name, description, taste
-        profile, preparation notes, category, spice level, and dietary tags.
-        Ranks by how many tokens hit.
-
-        Use for fuzzy or intent-style queries like "spicy", "paneer vegan",
-        "something creamy". For structured filters (e.g. "starters under
-        ₹400") use filter_menu instead.
+        Matches the query against dish name, description, taste profile,
+        preparation notes, category, spice level, and dietary tags, and also
+        ranks by semantic similarity, so vague requests like "comfort food for
+        a rainy day" or "something creamy and mild" work as well as exact terms
+        like "paneer" or an item ID like "M01".
 
         Dishes show on the customer's screen — speak only the top 2-3 names
         and their prices.
 
         Args:
             query: Freeform search terms (e.g. "chicken tikka", "spicy",
-                "vegan dessert").
+                "vegan dessert", "comfort food").
         """
         stop = _loop_guard("pc_search_menu", f"q={query}")
         if stop:
@@ -141,13 +155,10 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if not cards:
             msg = f"No matches for '{query}'."
         else:
-            # Include every item's ID so the LLM has the exact IDs it needs
-            # to call add_to_order next. Rendering is handled by the UI card;
-            # the spoken reply should still be short (system prompt enforces).
             lines = [f"{len(cards)} match(es) for '{query}':"]
             for c in cards:
                 lines.append(
-                    f"  - {c['name']} [id={c['id']}] — ₹{c['price']} ({c['category']})"
+                    f"  - {c['name']} [id={c['id']}] — Rs {c['price']} ({c['category']})"
                 )
             msg = "\n".join(lines)
         await params.result_callback(msg)
@@ -163,7 +174,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         """Filter the menu by one or more structured criteria (AND).
 
         Use when the customer combines constraints like "vegan mains under
-        ₹400" or "mild starters". For a single freeform word like "spicy"
+        Rs 400" or "mild starters". For a single freeform word like "spicy"
         or dish name, prefer search_menu.
 
         Matching dishes render as cards on screen.
@@ -205,7 +216,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if spice_level:
             parts.append(spice_level)
         if max_price_val:
-            parts.append(f"under ₹{int(max_price_val)}")
+            parts.append(f"under Rs {int(max_price_val)}")
         if keyword:
             parts.append(f'"{keyword}"')
         title = "Menu filter: " + (", ".join(parts) if parts else "all")
@@ -222,7 +233,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
             lines = [f"{len(cards)} match(es) for filter {title}:"]
             for c in cards:
                 lines.append(
-                    f"  - {c['name']} [id={c['id']}] — ₹{c['price']} ({c['category']})"
+                    f"  - {c['name']} [id={c['id']}] — Rs {c['price']} ({c['category']})"
                 )
             msg = "\n".join(lines)
         await params.result_callback(msg)
@@ -246,8 +257,6 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
 
         await push_ui_event(params.llm, "menu_results", {"title": "Our Menu", "items": cards})
 
-        # Group by category with full id,name,price list so the LLM can map
-        # any spoken dish name to its exact id without another tool call.
         by_cat: dict[str, list[dict]] = {}
         for c in cards:
             by_cat.setdefault(c["category"], []).append(c)
@@ -255,11 +264,234 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         for cat in sorted(by_cat.keys()):
             lines.append(f"  {cat}:")
             for c in by_cat[cat]:
-                lines.append(f"    - {c['name']} [id={c['id']}] — ₹{c['price']}")
+                lines.append(f"    - {c['name']} [id={c['id']}] — Rs {c['price']}")
         msg = "\n".join(lines)
         await params.result_callback(msg)
 
-    # --- Cart tools -------------------------------------------------------
+    # --- Customer identity tools -----------------------------------------
+
+    async def pc_lookup_customer(
+        params: FunctionCallParams, code_or_phone: str
+    ) -> None:
+        """Look up a RETURNING customer by their 4-digit code or phone number.
+
+        On a match, the rest of the call is tied to that customer and you get
+        back their name, delivery address, preferences and allergies — greet
+        them by name and confirm the address on file before ordering. On no
+        match, offer to register them as a new customer.
+
+        Args:
+            code_or_phone: The 4-digit code they quote (e.g. "4821") or their
+                phone number.
+        """
+        stop = _loop_guard("pc_lookup_customer", code_or_phone)
+        if stop:
+            await params.result_callback(stop)
+            return
+
+        with get_session() as db:
+            cust = CustomerService(db).lookup(code_or_phone)
+            if not cust:
+                await params.result_callback(
+                    f"No customer found for '{code_or_phone}'. Ask if they'd like "
+                    "to register as new — collect name, phone, and full address."
+                )
+                return
+            session.identify(cust)
+            card = customer_to_card(cust)
+
+        await push_ui_event(params.llm, "customer_card", card)
+        bits = [f"Welcome back {card['name'] or 'customer'} (code {card['code']})."]
+        if card["address_line"]:
+            addr = card["address_line"]
+            if card["area"]:
+                addr += f", {card['area']}"
+            if card["pincode"]:
+                addr += f" {card['pincode']}"
+            bits.append(f"Address on file: {addr}.")
+        if card["preferences"]:
+            bits.append(f"Preferences: {card['preferences']}.")
+        if card["allergies"]:
+            bits.append(f"Avoid (allergies): {card['allergies']}.")
+        bits.append(
+            "Greet them by name, confirm delivery to the address on file "
+            "(or ask if it changed), then take their order."
+        )
+        await params.result_callback(" ".join(bits))
+
+    async def pc_register_customer(
+        params: FunctionCallParams,
+        name: str,
+        phone: str,
+        address: str,
+        area: str = "",
+        pincode: str = "",
+        landmark: str = "",
+        preferences: str = "",
+        allergies: str = "",
+    ) -> None:
+        """Register a NEW customer after collecting their details.
+
+        IMPORTANT: this checks the delivery area first. If the area/pincode is
+        outside our delivery zone, registration is REFUSED — apologize and do
+        not take an order. On success, a 4-digit code is assigned; read it back
+        digit by digit and tell them to keep it for next time.
+
+        Args:
+            name: Customer's name.
+            phone: Phone number.
+            address: Full delivery address (flat/building/street).
+            area: Locality/neighbourhood (e.g. "Pali Hill", "Khar West").
+            pincode: 6-digit pincode if known.
+            landmark: Optional nearby landmark.
+            preferences: Optional food preferences (e.g. "loves extra spicy").
+            allergies: Optional allergies / dishes to avoid (e.g. "no peanuts").
+        """
+        sig = f"{name}|{phone}|{area}|{pincode}"
+        stop = _loop_guard("pc_register_customer", sig)
+        if stop:
+            await params.result_callback(stop)
+            return
+
+        with get_session() as db:
+            ok, matched = ServiceAreaService(db).is_serviceable(pincode or area)
+            matched_name = matched.name if matched else None
+            matched_pincode = matched.pincode if matched else None
+            if not ok:
+                await push_ui_event(
+                    params.llm,
+                    "delivery_check",
+                    {"query": area or pincode, "serviceable": False, "matched": None},
+                )
+                await params.result_callback(
+                    f"'{area or pincode}' is OUTSIDE our delivery area. Apologize "
+                    "warmly, explain we can't deliver there, and do NOT register "
+                    "or take an order."
+                )
+                return
+
+            cust = CustomerService(db).create_customer(
+                name=name,
+                phone=phone,
+                address_line=address,
+                area=area or matched_name,
+                pincode=pincode or matched_pincode,
+                landmark=landmark,
+                preferences=preferences,
+                allergies=allergies,
+            )
+            session.identify(cust)
+            card = customer_to_card(cust)
+
+        await push_ui_event(params.llm, "customer_card", card)
+        spaced = " ".join(list(card["code"]))
+        await params.result_callback(
+            f"Registered {card['name'] or 'customer'}. Their code is {card['code']} "
+            f"(read it back slowly as: {spaced}) — tell them to keep it for next "
+            "time so you can pull up their details instantly. Now take their order."
+        )
+
+    async def pc_update_customer(
+        params: FunctionCallParams,
+        preferences: str = "",
+        allergies: str = "",
+        address: str = "",
+        area: str = "",
+        pincode: str = "",
+        landmark: str = "",
+        name: str = "",
+        phone: str = "",
+    ) -> None:
+        """Amend the identified customer's saved details.
+
+        Use when a returning customer's address changed, or to record new
+        preferences/allergies they mention. Only the fields you pass are
+        updated. Requires a customer to be identified first.
+
+        Args:
+            preferences: New/updated food preferences.
+            allergies: New/updated allergies or dishes to avoid.
+            address: Updated full delivery address.
+            area: Updated locality.
+            pincode: Updated pincode.
+            landmark: Updated landmark.
+            name: Corrected name.
+            phone: Corrected phone.
+        """
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
+            return
+
+        fields: dict = {}
+        if preferences:
+            fields["preferences"] = preferences
+        if allergies:
+            fields["allergies"] = allergies
+        if address:
+            fields["address_line"] = address
+        if area:
+            fields["area"] = area
+        if pincode:
+            fields["pincode"] = pincode
+        if landmark:
+            fields["landmark"] = landmark
+        if name:
+            fields["name"] = name
+        if phone:
+            fields["phone"] = phone
+        if not fields:
+            await params.result_callback("Nothing to update — no fields provided.")
+            return
+
+        with get_session() as db:
+            cust = CustomerService(db).update_customer(session.customer_id, **fields)
+            session.identify(cust)
+            card = customer_to_card(cust)
+
+        await push_ui_event(params.llm, "customer_card", card)
+        await params.result_callback(
+            f"Updated {card['name'] or 'the customer'}'s details. Confirm the change briefly."
+        )
+
+    async def pc_check_delivery_area(
+        params: FunctionCallParams, area_or_pincode: str
+    ) -> None:
+        """Check whether an area or pincode is within our delivery zone.
+
+        Use this BEFORE registering a new customer or before agreeing to
+        deliver, whenever a customer states where they are. If it returns
+        out-of-area, apologize and do not take a delivery order.
+
+        Args:
+            area_or_pincode: The locality name or 6-digit pincode to check.
+        """
+        stop = _loop_guard("pc_check_delivery_area", area_or_pincode)
+        if stop:
+            await params.result_callback(stop)
+            return
+
+        with get_session() as db:
+            ok, matched = ServiceAreaService(db).is_serviceable(area_or_pincode)
+            matched_name = matched.name if matched else None
+
+        await push_ui_event(
+            params.llm,
+            "delivery_check",
+            {"query": area_or_pincode, "serviceable": ok, "matched": matched_name},
+        )
+        if ok:
+            await params.result_callback(
+                f"'{area_or_pincode}' IS within our delivery area "
+                f"(matched {matched_name}). Go ahead and take the order."
+            )
+        else:
+            await params.result_callback(
+                f"'{area_or_pincode}' is OUTSIDE our delivery area. Politely "
+                "apologize and explain we can't deliver there — do not take a "
+                "delivery order for this address."
+            )
+
+    # --- Cart tools (require an identified customer) ----------------------
 
     async def pc_view_order(params: FunctionCallParams) -> None:
         """Show the customer's current in-progress cart.
@@ -273,10 +505,13 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
+            return
 
         with get_session() as db:
             service = OrderService(db)
-            cart = service.get_or_create_cart(user_id)
+            cart = service.get_or_create_cart_for_customer(session.customer_id)
             menu_repo = MenuRepo(db)
             card = order_to_card(cart, menu_repo)
 
@@ -285,20 +520,18 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if not card["items"]:
             msg = "Your cart is empty."
         else:
-            # Full breakdown so the LLM knows every item_id and can act on
-            # pre-existing items across conversation / process restarts.
             lines = [
                 f"Cart (#{card['id'][:8]}) — {card['item_count']} item(s):"
             ]
             for it in card["items"]:
                 note = f" ({it['special_instructions']})" if it["special_instructions"] else ""
                 lines.append(
-                    f"  - {it['quantity']}× {it['name']} [id={it['menu_item_id']}] — ₹{it['line_total']}{note}"
+                    f"  - {it['quantity']}× {it['name']} [id={it['menu_item_id']}] — Rs {it['line_total']}{note}"
                 )
-            lines.append(f"Subtotal: ₹{card['subtotal']:.2f}")
+            lines.append(f"Subtotal: Rs {card['subtotal']:.2f}")
             for ch in card["charges"]:
-                lines.append(f"  + {ch['label']}: ₹{ch['amount']:.2f}")
-            lines.append(f"Total (incl. charges): ₹{card['total']:.2f}")
+                lines.append(f"  + {ch['label']}: Rs {ch['amount']:.2f}")
+            lines.append(f"Total (incl. charges): Rs {card['total']:.2f}")
             msg = "\n".join(lines)
         await params.result_callback(msg)
 
@@ -310,7 +543,8 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
     ) -> None:
         """Add an item to the customer's cart.
 
-        Only call after verifying the item_id via search_menu/get_menu_categories.
+        Only call after verifying the item_id via search_menu/get_menu_categories,
+        and after a customer has been identified.
 
         Args:
             item_id: The menu item ID (e.g. 'M01').
@@ -322,11 +556,14 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
+            return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart(user_id)
+            cart = service.get_or_create_cart_for_customer(session.customer_id)
             try:
                 service.add_item(cart.id, item_id, quantity, special_instructions)
             except ValueError as e:
@@ -340,8 +577,9 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         await push_ui_event(params.llm, "cart_view", card)
 
         msg = (
-            f"Added {quantity}× {added_name} to the cart. "
-            f"Cart total is now ₹{card['total']}."
+            f"Added {quantity}× {added_name}. New grand total (incl. charges) is "
+            f"{card['total']:.2f} rupees — say this exact figure in rupees, "
+            "do not add it up yourself and never say dollars."
         )
         await params.result_callback(msg)
 
@@ -355,11 +593,14 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
+            return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart(user_id)
+            cart = service.get_or_create_cart_for_customer(session.customer_id)
             removed = menu_repo.get_by_id(item_id)
             removed_name = removed.name if removed else item_id
             try:
@@ -372,38 +613,100 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
 
         await push_ui_event(params.llm, "cart_view", card)
         await params.result_callback(
-            f"Removed {removed_name}. Cart total is ₹{card['total']}."
+            f"Removed {removed_name}. New grand total (incl. charges) is "
+            f"{card['total']:.2f} rupees — say this exact figure in rupees, "
+            "do not add it up yourself and never say dollars."
         )
 
-    async def pc_confirm_order(params: FunctionCallParams) -> None:
-        """Confirm the cart and send it to the kitchen.
+    async def pc_update_quantity(
+        params: FunctionCallParams,
+        item_id: str,
+        quantity: int,
+    ) -> None:
+        """Set the ABSOLUTE quantity of an item already in (or being added to)
+        the cart. Use this whenever the customer says how many they want in
+        total — "make it two", "change it to three", "actually just one".
 
-        Only call when the user has explicitly said they're done.
+        For "add another / one more", use add_to_order instead (that adds on
+        top). Setting quantity to 0 removes the item.
+
+        Args:
+            item_id: The menu item ID (e.g. 'M02').
+            quantity: The new TOTAL quantity for this item.
         """
-        stop = _loop_guard("pc_confirm_order", "")
+        sig = f"{item_id}|{quantity}"
+        stop = _loop_guard("pc_update_quantity", sig)
         if stop:
             await params.result_callback(stop)
+            return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
             return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart(user_id)
+            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            named = menu_repo.get_by_id(item_id)
+            item_name = named.name if named else item_id
             try:
-                order = service.confirm_order(cart.id)
+                service.set_item_quantity(cart.id, item_id, quantity)
+            except ValueError as e:
+                await params.result_callback(str(e))
+                return
+            db.refresh(cart)
+            card = order_to_card(cart, menu_repo)
+
+        await push_ui_event(params.llm, "cart_view", card)
+        if quantity <= 0:
+            await params.result_callback(
+                f"Removed {item_name}. New grand total (incl. charges) is "
+                f"{card['total']:.2f} rupees — say this exact figure in rupees."
+            )
+        else:
+            await params.result_callback(
+                f"Set {item_name} to {quantity}. New grand total (incl. charges) is "
+                f"{card['total']:.2f} rupees — say this exact figure in rupees, "
+                "do not add it up yourself and never say dollars."
+            )
+
+    async def pc_confirm_order(params: FunctionCallParams) -> None:
+        """Confirm the cart and send it to the kitchen for delivery.
+
+        Only call when the customer has explicitly said they're done. Confirm
+        the delivery address with them first. This freezes the delivery details
+        onto the order.
+        """
+        stop = _loop_guard("pc_confirm_order", "")
+        if stop:
+            await params.result_callback(stop)
+            return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
+            return
+
+        with get_session() as db:
+            service = OrderService(db)
+            menu_repo = MenuRepo(db)
+            cust = CustomerRepo(db).get_by_id(session.customer_id)
+            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            try:
+                order = service.confirm_order(cart.id, customer=cust)
             except ValueError as e:
                 await params.result_callback(str(e))
                 return
             db.refresh(order)
             card = order_to_card(order, menu_repo)
+            deliver_to = order.delivery_address or "the address on file"
 
         await push_ui_event(params.llm, "order_confirmed", card)
         charges_str = ", ".join(
-            f"{c['label'].lower()} ₹{c['amount']:.2f}" for c in card["charges"]
+            f"{c['label'].lower()} Rs {c['amount']:.2f}" for c in card["charges"]
         )
         await params.result_callback(
-            f"Order #{card['id'][:8]} confirmed. Subtotal ₹{card['subtotal']:.2f}; "
-            f"{charges_str}; grand total ₹{card['total']:.2f}. Kitchen has it."
+            f"Order #{card['id'][:8]} confirmed for delivery to {deliver_to}. "
+            f"Subtotal Rs {card['subtotal']:.2f}; {charges_str}; grand total "
+            f"Rs {card['total']:.2f}. Kitchen has it."
         )
 
     async def pc_cancel_order(params: FunctionCallParams) -> None:
@@ -412,11 +715,14 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
+            return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart(user_id)
+            cart = service.get_or_create_cart_for_customer(session.customer_id)
             if cart.status == "confirmed":
                 await params.result_callback(
                     "Already confirmed — please speak to the manager."
@@ -427,7 +733,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
             except ValueError as e:
                 await params.result_callback(str(e))
                 return
-            new_cart = service.get_or_create_cart(user_id)
+            new_cart = service.get_or_create_cart_for_customer(session.customer_id)
             card = order_to_card(new_cart, menu_repo)
 
         await push_ui_event(params.llm, "cart_view", card)
@@ -440,7 +746,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         status: str = "",
         limit: int = 5,
     ) -> None:
-        """Search the customer's past orders, optionally filtered by status.
+        """Search the identified customer's past orders, optionally by status.
 
         Orders are rendered as cards on screen. Your spoken reply is a summary
         ("You have 3 confirmed and 1 cancelled") — the UI shows the details.
@@ -452,6 +758,9 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         stop = _loop_guard("pc_search_my_orders", f"s={status}|l={limit}")
         if stop:
             await params.result_callback(stop)
+            return
+        if not session.is_identified:
+            await params.result_callback(_NEED_CUSTOMER)
             return
 
         status = (status or "").strip().lower()
@@ -465,7 +774,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            all_orders = service.get_orders(user_id)
+            all_orders = service.get_orders_for_customer(session.customer_id)
             counts: dict[str, int] = {}
             for o in all_orders:
                 counts[o.status] = counts.get(o.status, 0) + 1
@@ -488,7 +797,7 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
             lines = [f"Order history — {summary}:"]
             for c in cards:
                 lines.append(
-                    f"  - #{c['id'][:8]} {c['status']} — {c['item_count']} item(s) — ₹{c['total']}"
+                    f"  - #{c['id'][:8]} {c['status']} — {c['item_count']} item(s) — Rs {c['total']}"
                 )
             msg = "\n".join(lines)
         await params.result_callback(msg)
@@ -542,8 +851,13 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
         pc_search_menu,
         pc_filter_menu,
         pc_get_menu_categories,
+        pc_lookup_customer,
+        pc_register_customer,
+        pc_update_customer,
+        pc_check_delivery_area,
         pc_view_order,
         pc_add_to_order,
+        pc_update_quantity,
         pc_remove_from_order,
         pc_confirm_order,
         pc_cancel_order,
@@ -558,10 +872,13 @@ def _make_tool_wrappers(user_id: str, user_timezone: str | None = None):
 
 def create_pipeline(
     websocket: WebSocket,
-    user_id: str = None,
     user_timezone: str | None = None,
 ):
-    """Create a fresh Gemini Live Native Audio pipeline per connection."""
+    """Create a fresh Gemini Live Native Audio pipeline per connection.
+
+    The connection starts anonymous; the agent identifies the caller mid-call
+    and the shared CallSession carries that identity to the cart/order tools.
+    """
     if not GOOGLE_API_KEY:
         raise RuntimeError(
             "GOOGLE_API_KEY not set — required for Gemini Live Native Audio. "
@@ -584,10 +901,13 @@ def create_pipeline(
         build_time_context_message(user_timezone) + "\n\n" + SYSTEM_PROMPT
     )
 
+    # One mutable session shared by all tool wrappers for this connection.
+    session = CallSession()
+
     # Collect tool schemas up front. Pass tools at init time ONLY — if we also
     # put them on the LLMContext, Pipecat treats that as a change-at-runtime
     # and forces a reconnect (during which audio is dropped).
-    tool_fns = _make_tool_wrappers(user_id or "", user_timezone)
+    tool_fns = _make_tool_wrappers(session, user_timezone)
     tool_schemas = [DirectFunctionWrapper(f).to_function_schema() for f in tool_fns]
     tools = ToolsSchema(standard_tools=tool_schemas)
 
@@ -605,11 +925,6 @@ def create_pipeline(
     for tool_fn in tool_fns:
         llm.register_direct_function(tool_fn)
 
-    # Universal context + aggregator (new API; the service's
-    # create_context_aggregator helper is deprecated in 0.0.108).
-    # VAD lives on the user aggregator per Pipecat's new convention.
-    # NOTE: don't set tools on the context — init-time tools are already
-    # active, and adding them here would trigger an unnecessary reconnect.
     context = LLMContext()
     agg = LLMContextAggregatorPair(
         context,

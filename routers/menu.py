@@ -1,11 +1,12 @@
 """Menu router: public read + admin CRUD."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.base import get_db
 from dependencies import require_admin
+from services.image_service import upload_enabled, upload_image
 from services.menu_service import MenuService
 
 router = APIRouter(prefix="/menu", tags=["menu"])
@@ -117,3 +118,46 @@ def disable_menu_item(
         db.commit()
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+class UploadImageResponse(BaseModel):
+    image_url: str
+
+
+@router.post("/upload-image", response_model=UploadImageResponse)
+async def upload_menu_image(
+    file: UploadFile = File(...),
+    _=Depends(require_admin),
+):
+    """Upload a menu-item image to Cloudinary; returns the hosted URL to store
+    in the item's image_url. Falls back with a clear error if upload isn't
+    configured (admin can paste a URL instead)."""
+    if not upload_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Image upload isn't configured (CLOUDINARY_URL unset). Paste an image URL instead.",
+        )
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image.")
+    try:
+        contents = await file.read()
+        url = upload_image(contents)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Upload failed: {e}")
+    return UploadImageResponse(image_url=url)
+
+
+class ReembedResponse(BaseModel):
+    embedded: int
+
+
+@router.post("/reembed", response_model=ReembedResponse)
+def reembed_menu(
+    only_missing: bool = False,
+    db: Session = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """Regenerate semantic-search embeddings for the menu (admin tool)."""
+    count = MenuService(db).reembed_all(only_missing=only_missing)
+    db.commit()
+    return ReembedResponse(embedded=count)

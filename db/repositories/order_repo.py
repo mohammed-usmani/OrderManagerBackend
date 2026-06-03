@@ -27,6 +27,21 @@ class OrderRepo:
             .all()
         )
 
+    def get_cart_for_customer(self, customer_id: str) -> Order | None:
+        return (
+            self.db.query(Order)
+            .filter(Order.customer_id == customer_id, Order.status == "cart")
+            .first()
+        )
+
+    def get_all_for_customer(self, customer_id: str) -> list[Order]:
+        return (
+            self.db.query(Order)
+            .filter(Order.customer_id == customer_id)
+            .order_by(Order.created_at.desc())
+            .all()
+        )
+
     def list_all(self, statuses: list[str] | None = None) -> list[Order]:
         """Admin-scope: list every order, optionally filtered by status."""
         q = self.db.query(Order)
@@ -34,8 +49,8 @@ class OrderRepo:
             q = q.filter(Order.status.in_(statuses))
         return q.order_by(Order.created_at.desc()).all()
 
-    def create(self, user_id: str) -> Order:
-        order = Order(user_id=user_id)
+    def create(self, user_id: str | None = None, customer_id: str | None = None) -> Order:
+        order = Order(user_id=user_id, customer_id=customer_id)
         self.db.add(order)
         self.db.flush()
         return order
