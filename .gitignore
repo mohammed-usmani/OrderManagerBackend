@@ -14,3 +14,6 @@ wheels/
 
 # Runtime data
 data/
+
+# Cloud Run env-vars file (contains secrets)
+*.cloudrun.yaml

@@ -81,22 +81,38 @@ email alerts at 50% / 90% / 100%. (GCP won't auto-stop, but you'll know early.)
 From the **`server/`** folder (Cloud Run sees the `Dockerfile` and builds it for
 you — no manual `docker push` needed):
 
+**Use an env-vars file** — your secrets contain `@`, `&`, `!` etc., and passing
+those through `--set-env-vars` fights both the shell and gcloud's delimiter
+parsing. A YAML file sidesteps all of it (gcloud reads it directly) and is
+reusable for redeploys.
+
+Create `server/env.cloudrun.yaml` (already gitignored via `*.cloudrun.yaml` —
+never commit it). Quote every value:
+
+```yaml
+DATABASE_URL: "postgresql://USER:PASS@HOST/db?sslmode=require&channel_binding=require"
+REDIS_URL: "redis://default:PASS@HOST:PORT"
+GOOGLE_API_KEY: "YOUR_GOOGLE_KEY"
+MISTRAL_API_KEY: "YOUR_MISTRAL_KEY"        # optional (semantic search)
+JWT_SECRET_KEY: "<run: openssl rand -hex 32>"
+JWT_EXPIRE_DAYS: "7"
+ADMIN_EMAIL: "you@example.com"
+ADMIN_PASSWORD: "your-strong-password"
+```
+
+Then deploy from `server/`:
+
 ```bash
 cd RestaurantOrderManager/server
 
 gcloud run deploy saffron-smoke-api \
   --source . \
+  --region asia-south1 \
   --allow-unauthenticated \
   --memory 2Gi --cpu 1 --cpu-boost \
   --timeout 3600 \
   --min-instances 0 --max-instances 3 \
-  --set-env-vars "DATABASE_URL=postgresql://USER:PASS@HOST/db?sslmode=require" \
-  --set-env-vars "^@^REDIS_URL=rediss://default:PASS@HOST:PORT" \
-  --set-env-vars "GOOGLE_API_KEY=YOUR_GOOGLE_KEY" \
-  --set-env-vars "MISTRAL_API_KEY=YOUR_MISTRAL_KEY" \
-  --set-env-vars "JWT_SECRET_KEY=$(openssl rand -hex 32)" \
-  --set-env-vars "ADMIN_EMAIL=you@example.com" \
-  --set-env-vars "ADMIN_PASSWORD=pick-a-strong-password"
+  --env-vars-file env.cloudrun.yaml
 ```
 
 The first build takes a few minutes (it's a ~2.5 GB AI image). When it finishes
@@ -109,12 +125,14 @@ you'll get a URL like `https://saffron-smoke-api-xxxxx.asia-south1.run.app`.
 - `--memory 2Gi --cpu-boost` → the image loads heavy AI libs; this boots faster.
 - `--max-instances 3` → safety cap so nothing can fan out and burn credits.
 - `--min-instances 0` → scale to zero = ₹0 idle (accept a few-sec first call).
-- `^@^...REDIS_URL=...` → the `^@^` changes the value separator to `@` just for
-  that one var, so the `@` inside the Redis URL isn't misread. (Commas in URLs
-  would need the same trick.)
+- `--env-vars-file` → all env vars from the YAML, no escaping headaches.
 
-> **Secrets, the cleaner way (optional):** instead of `--set-env-vars`, store
-> keys in Secret Manager and use `--set-secrets "GOOGLE_API_KEY=google-key:latest,..."`.
+> ⚠️ Do **not** use `--set-env-vars "^@^REDIS_URL=...@host..."` — the `^@^` makes
+> `@` the separator, which then splits the `@` *inside* the Redis URL and fails.
+> The env-vars file avoids this entirely.
+
+> **Secrets, the cleaner way (optional):** store keys in Secret Manager and use
+> `--set-secrets "GOOGLE_API_KEY=google-key:latest,..."` instead of the file.
 
 ### Migrations
 The container runs `alembic upgrade head` on boot (creates tables + the pgvector
