@@ -33,6 +33,15 @@ EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "1024"))
 # disabled and admins can still paste an image URL directly.
 CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
 
+# Hard cap on a single voice call (seconds). Protects against runaway/abusive
+# sessions holding a WebSocket (and CPU) open indefinitely. Default 15 minutes.
+MAX_SESSION_SECONDS = int(os.environ.get("MAX_SESSION_SECONDS", "900"))
+
+# Per-IP cooldown between voice calls (seconds). 0 disables the cooldown — but a
+# single active call per IP is always enforced. Keeps one visitor from hogging
+# the shared demo CPU. Set to 0 locally while developing.
+SESSION_COOLDOWN_SECONDS = int(os.environ.get("SESSION_COOLDOWN_SECONDS", "60"))
+
 JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
