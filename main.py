@@ -111,7 +111,13 @@ async def websocket_endpoint(websocket: WebSocket):
     allowed, reason = session_gate(ip)
     if not allowed:
         logger.info(f"Voice connect rate-limited for {ip}: {reason}")
-        await websocket.close(code=4003, reason=reason)
+        # A WebSocket close reason is capped at 123 bytes by the protocol —
+        # truncate so a long message can't raise "control frame too long".
+        safe_reason = reason.encode("utf-8")[:120].decode("utf-8", "ignore")
+        try:
+            await websocket.close(code=4003, reason=safe_reason)
+        except Exception as e:
+            logger.warning(f"close after rate-limit failed: {e}")
         return
 
     logger.info(

@@ -37,10 +37,16 @@ CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
 # sessions holding a WebSocket (and CPU) open indefinitely. Default 15 minutes.
 MAX_SESSION_SECONDS = int(os.environ.get("MAX_SESSION_SECONDS", "900"))
 
-# Per-IP cooldown between voice calls (seconds). 0 disables the cooldown — but a
-# single active call per IP is always enforced. Keeps one visitor from hogging
-# the shared demo CPU. Set to 0 locally while developing.
-SESSION_COOLDOWN_SECONDS = int(os.environ.get("SESSION_COOLDOWN_SECONDS", "60"))
+# How many simultaneous calls one public IP may have. Several distinct people
+# often share one IP (home wifi, mobile NAT, offices), so keep this >1 or you'll
+# block your own friends. Total load is still bounded by Cloud Run max-instances
+# and the per-call time cap.
+MAX_CALLS_PER_IP = int(os.environ.get("MAX_CALLS_PER_IP", "3"))
+
+# Per-IP cooldown between calls (seconds). 0 = off (default). On shared IPs this
+# affects everyone on that network, so it's off by default; raise it only if you
+# need anti-spam and accept the shared-IP tradeoff.
+SESSION_COOLDOWN_SECONDS = int(os.environ.get("SESSION_COOLDOWN_SECONDS", "0"))
 
 JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 JWT_ALGORITHM = "HS256"
