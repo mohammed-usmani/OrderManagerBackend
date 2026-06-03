@@ -1,62 +1,51 @@
-"""Per-SESSION voice-call limiting, backed by the same Redis as WS tickets.
+"""Global concurrency cap for voice calls, backed by the same Redis as tickets.
 
-Keyed on a per-browser client id (the frontend generates one and stores it in
-localStorage), NOT on IP — so different people behind one NAT never block each
-other, while one browser still can't hold many concurrent calls.
+The real limit is the Gemini free tier (~3 concurrent Live sessions), which is a
+*global* cap, not per-user. We track active calls in a Redis sorted set keyed by
+a per-call id with the start timestamp as score, so:
 
-Cheap (a couple of Redis ops per call). Messages are kept SHORT: they're sent as
-the WebSocket close `reason`, capped at 123 bytes by the protocol. Fails OPEN on
-any Redis error.
+  - we count concurrency across ALL Cloud Run instances (shared Redis),
+  - stale entries (a crashed/killed session that never released) are pruned by
+    age, so the cap can never get permanently stuck,
+  - a returning user gets a slot the instant one is free — no per-user block.
+
+Callers that don't get a slot are told "busy"; the frontend auto-retries (queue).
+Fails OPEN on any Redis error.
 """
+
+import time
 
 import redis as redis_lib
 from loguru import logger
 
-from config import (
-    MAX_CALLS_PER_SESSION,
-    MAX_SESSION_SECONDS,
-    REDIS_URL,
-    SESSION_COOLDOWN_SECONDS,
-)
+from config import MAX_CONCURRENT_CALLS, MAX_SESSION_SECONDS, REDIS_URL
 
 _redis = redis_lib.from_url(REDIS_URL, decode_responses=True)
 
-_COUNT = "vc:s:count:{id}"
-_COOLDOWN = "vc:s:cooldown:{id}"
+_ACTIVE = "vc:concurrent"
+# An entry older than this is assumed dead (a call can't outlive the time cap).
+_STALE_AFTER = MAX_SESSION_SECONDS + 60
 
 
-def session_gate(session_id: str) -> tuple[bool, str]:
-    """Reserve a call slot for this browser session. Returns (allowed, reason)."""
-    if not session_id:
-        return True, ""
+def acquire_slot(call_id: str) -> tuple[bool, str]:
+    """Try to take one of the global concurrency slots. (allowed, reason)."""
     try:
-        if SESSION_COOLDOWN_SECONDS > 0:
-            ttl = _redis.ttl(_COOLDOWN.format(id=session_id))
-            if ttl and ttl > 0:
-                return False, f"Please wait ~{ttl}s before your next call (demo limit)."
-
-        key = _COUNT.format(id=session_id)
-        count = _redis.incr(key)
-        # TTL so a crashed session can't leak the counter forever.
-        _redis.expire(key, MAX_SESSION_SECONDS + 60)
-        if count > MAX_CALLS_PER_SESSION:
-            _redis.decr(key)
-            return False, "You already have a call open. Finish that one first."
+        now = time.time()
+        # Drop any leaked entries from crashed sessions first.
+        _redis.zremrangebyscore(_ACTIVE, 0, now - _STALE_AFTER)
+        _redis.zadd(_ACTIVE, {call_id: now})
+        if _redis.zcard(_ACTIVE) > MAX_CONCURRENT_CALLS:
+            _redis.zrem(_ACTIVE, call_id)  # give the slot back
+            return False, "All voice lines are busy right now."
         return True, ""
     except Exception as e:  # never block real users on a Redis hiccup
-        logger.warning(f"rate-limit gate failed, allowing call: {e}")
+        logger.warning(f"concurrency acquire failed, allowing call: {e}")
         return True, ""
 
 
-def session_release(session_id: str) -> None:
-    """Free this session's slot and (optionally) start its cooldown."""
-    if not session_id:
-        return
+def release_slot(call_id: str) -> None:
+    """Release a concurrency slot when the call ends."""
     try:
-        key = _COUNT.format(id=session_id)
-        if _redis.decr(key) < 0:
-            _redis.set(key, 0)
-        if SESSION_COOLDOWN_SECONDS > 0:
-            _redis.setex(_COOLDOWN.format(id=session_id), SESSION_COOLDOWN_SECONDS, "1")
+        _redis.zrem(_ACTIVE, call_id)
     except Exception as e:
-        logger.warning(f"rate-limit release failed: {e}")
+        logger.warning(f"concurrency release failed: {e}")

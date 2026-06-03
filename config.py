@@ -37,16 +37,12 @@ CLOUDINARY_URL = os.environ.get("CLOUDINARY_URL", "")
 # sessions holding a WebSocket (and CPU) open indefinitely. Default 15 minutes.
 MAX_SESSION_SECONDS = int(os.environ.get("MAX_SESSION_SECONDS", "900"))
 
-# Rate limiting is keyed on a per-BROWSER client id (sent by the frontend), not
-# on IP — so different people behind one NAT never block each other, while one
-# person still can't open many concurrent calls. Total load is also bounded by
-# Cloud Run max-instances and the per-call time cap.
-#
-# Max simultaneous calls per browser session (tabs of one browser share the id).
-MAX_CALLS_PER_SESSION = int(os.environ.get("MAX_CALLS_PER_SESSION", "1"))
-
-# Cooldown between calls for the same browser session (seconds). 0 = off.
-SESSION_COOLDOWN_SECONDS = int(os.environ.get("SESSION_COOLDOWN_SECONDS", "0"))
+# GLOBAL cap on simultaneous voice calls across ALL users — this is the real
+# bottleneck: the Gemini free tier allows ~3 concurrent Live sessions. Anyone
+# arriving when all slots are full is turned away with a "lines busy" message,
+# and the client auto-retries until a slot frees up (a simple queue). A returning
+# user gets straight in whenever a slot is free — no per-user blocking.
+MAX_CONCURRENT_CALLS = int(os.environ.get("MAX_CONCURRENT_CALLS", "3"))
 
 JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 JWT_ALGORITHM = "HS256"

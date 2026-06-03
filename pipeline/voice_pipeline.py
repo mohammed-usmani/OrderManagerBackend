@@ -518,7 +518,11 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         await push_ui_event(params.llm, "cart_view", card)
 
         if not card["items"]:
-            msg = "Your cart is empty."
+            msg = (
+                "The cart is empty. NOTE: if they just confirmed an order, it's "
+                "already placed and with the kitchen — do not tell them they have "
+                "no order; use search_my_orders to show it."
+            )
         else:
             lines = [
                 f"Cart (#{card['id'][:8]}) — {card['item_count']} item(s):"
@@ -704,9 +708,10 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             f"{c['label'].lower()} Rs {c['amount']:.2f}" for c in card["charges"]
         )
         await params.result_callback(
-            f"Order #{card['id'][:8]} confirmed for delivery to {deliver_to}. "
+            f"Order #{card['id'][:8]} CONFIRMED and placed for delivery to {deliver_to}. "
             f"Subtotal Rs {card['subtotal']:.2f}; {charges_str}; grand total "
-            f"Rs {card['total']:.2f}. Kitchen has it."
+            f"Rs {card['total']:.2f}. Kitchen has it. The order is now placed — do NOT "
+            "call view_order or say there's no order afterward; the cart is empty by design."
         )
 
     async def pc_cancel_order(params: FunctionCallParams) -> None:

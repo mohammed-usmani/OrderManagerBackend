@@ -8,6 +8,7 @@ Auxiliary REST:
 """
 
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -23,7 +24,7 @@ from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline
 from routers import admin, auth, customers, menu, orders, service_areas
 from services.auth_service import auth_service
-from services.ratelimit import session_gate, session_release
+from services.ratelimit import acquire_slot, release_slot
 
 
 def _client_ip(websocket: WebSocket) -> str:
@@ -103,17 +104,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     user_timezone = payload.get("timezone")
     ip = _client_ip(websocket)
-    # Rate limit on the per-browser client id the frontend sends; fall back to
-    # IP only if it's missing (e.g. an older cached client).
-    session_id = websocket.query_params.get("cid") or ip
+    call_id = uuid.uuid4().hex
 
     await websocket.accept()
 
-    # Per-session rate limiting (one active call per browser + optional cooldown).
-    # We accept first so the browser gets a proper close code + reason to show.
-    allowed, reason = session_gate(session_id)
+    # Global concurrency cap (Gemini free tier ≈ 3 Live sessions). We accept
+    # first so the browser gets a proper close code + reason to show/retry on.
+    allowed, reason = acquire_slot(call_id)
     if not allowed:
-        logger.info(f"Voice connect rate-limited for session={session_id} ip={ip}: {reason}")
+        logger.info(f"Voice connect turned away (lines busy) ip={ip}: {reason}")
         # A WebSocket close reason is capped at 123 bytes by the protocol —
         # truncate so a long message can't raise "control frame too long".
         safe_reason = reason.encode("utf-8")[:120].decode("utf-8", "ignore")
@@ -190,7 +189,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await runner.run(task)
     finally:
         cap_task.cancel()
-        session_release(session_id)
+        release_slot(call_id)
     logger.info(f"Voice client disconnected: {ip}")
 
 
