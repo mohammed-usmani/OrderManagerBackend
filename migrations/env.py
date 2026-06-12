@@ -19,6 +19,10 @@ import db.models.order  # noqa: F401, E402
 import db.models.chat  # noqa: F401, E402
 import db.models.customer  # noqa: F401, E402
 import db.models.service_area  # noqa: F401, E402
+import db.models.dining_zone  # noqa: F401, E402
+import db.models.restaurant_table  # noqa: F401, E402
+import db.models.table_session  # noqa: F401, E402
+import db.models.app_setting  # noqa: F401, E402
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])

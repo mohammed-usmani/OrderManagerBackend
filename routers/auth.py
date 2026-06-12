@@ -29,6 +29,7 @@ class TokenResponse(BaseModel):
 
 class TicketRequest(BaseModel):
     timezone: str | None = None
+    table_token: str | None = None  # binds a dine-in call to a table (QR scan)
 
 
 class TicketResponse(BaseModel):
@@ -67,5 +68,6 @@ def ws_ticket(req: TicketRequest | None = None):
     timezone. The caller is identified later, in-conversation, by the agent.
     """
     timezone = req.timezone if req else None
-    ticket = auth_service.issue_ws_ticket(timezone=timezone)
+    table_token = req.table_token if req else None
+    ticket = auth_service.issue_ws_ticket(timezone=timezone, table_token=table_token)
     return TicketResponse(ticket=ticket)

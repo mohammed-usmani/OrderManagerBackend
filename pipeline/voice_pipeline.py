@@ -40,7 +40,7 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
-from agent.brain import SYSTEM_PROMPT, build_time_context_message
+from agent.brain import build_system_prompt, build_time_context_message
 from agent.session_state import CallSession
 from config import GEMINI_MODEL, GEMINI_VOICE, GOOGLE_API_KEY
 from db.base import get_session
@@ -52,10 +52,13 @@ from pipeline.ui_events import (
     order_to_card,
     push_ui_event,
 )
+from loguru import logger
+
 from services.customer_service import CustomerService
 from services.menu_service import MenuService
 from services.order_service import OrderService
 from services.service_area_service import ServiceAreaService
+from services.table_service import TableService
 
 RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -111,6 +114,25 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
                 "you already have and respond to the user with plain text."
             )
         return None
+
+    def _cart(service: OrderService):
+        """The active cart for this call — table tab (dine-in) or customer (parcel)."""
+        if session.order_type == "dine_in":
+            cart = service.get_or_create_cart_for_table(
+                session.table_id, zone_name=session.zone_name, is_ac=session.is_ac
+            )
+            session.table_session_id = cart.table_session_id
+            return cart
+        return service.get_or_create_cart_for_customer(session.customer_id)
+
+    def _need_msg() -> str:
+        """Why an order tool refused — depends on the call mode."""
+        if session.order_type == "dine_in":
+            return (
+                "I don't know which table this is yet. Ask the guest for their "
+                "table number or the code on the QR card, then call set_table."
+            )
+        return _NEED_CUSTOMER
 
     # --- Menu tools -------------------------------------------------------
 
@@ -418,8 +440,8 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             name: Corrected name.
             phone: Corrected phone.
         """
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         fields: dict = {}
@@ -505,13 +527,13 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         with get_session() as db:
             service = OrderService(db)
-            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            cart = _cart(service)
             menu_repo = MenuRepo(db)
             card = order_to_card(cart, menu_repo)
 
@@ -560,14 +582,14 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            cart = _cart(service)
             try:
                 service.add_item(cart.id, item_id, quantity, special_instructions)
             except ValueError as e:
@@ -597,14 +619,14 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            cart = _cart(service)
             removed = menu_repo.get_by_id(item_id)
             removed_name = removed.name if removed else item_id
             try:
@@ -643,14 +665,14 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            cart = _cart(service)
             named = menu_repo.get_by_id(item_id)
             item_name = named.name if named else item_id
             try:
@@ -675,25 +697,27 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             )
 
     async def pc_confirm_order(params: FunctionCallParams) -> None:
-        """Confirm the cart and send it to the kitchen for delivery.
+        """Send the current order to the kitchen.
 
-        Only call when the customer has explicitly said they're done. Confirm
-        the delivery address with them first. This freezes the delivery details
-        onto the order.
+        Only call when the customer has explicitly said they're done. For
+        parcel, confirm the delivery address first (this freezes it onto the
+        order). For dine-in this fires the round to the kitchen; the guest can
+        order more rounds afterward and pays at the end.
         """
         stop = _loop_guard("pc_confirm_order", "")
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
+        dine_in = session.order_type == "dine_in"
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cust = CustomerRepo(db).get_by_id(session.customer_id)
-            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            cust = None if dine_in else CustomerRepo(db).get_by_id(session.customer_id)
+            cart = _cart(service)
             try:
                 order = service.confirm_order(cart.id, customer=cust)
             except ValueError as e:
@@ -707,12 +731,21 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         charges_str = ", ".join(
             f"{c['label'].lower()} Rs {c['amount']:.2f}" for c in card["charges"]
         )
-        await params.result_callback(
-            f"Order #{card['id'][:8]} CONFIRMED and placed for delivery to {deliver_to}. "
-            f"Subtotal Rs {card['subtotal']:.2f}; {charges_str}; grand total "
-            f"Rs {card['total']:.2f}. Kitchen has it. The order is now placed — do NOT "
-            "call view_order or say there's no order afterward; the cart is empty by design."
-        )
+        if dine_in:
+            await params.result_callback(
+                f"Round for Table {session.table_label} SENT to the kitchen. "
+                f"Subtotal Rs {card['subtotal']:.2f}; {charges_str}; grand total so far "
+                f"Rs {card['total']:.2f}. The kitchen is on it. Tell the guest it's "
+                "being prepared and ask if they'd like anything else — they pay at the "
+                "end (use request_bill when they're ready). The cart is empty by design now."
+            )
+        else:
+            await params.result_callback(
+                f"Order #{card['id'][:8]} CONFIRMED and placed for delivery to {deliver_to}. "
+                f"Subtotal Rs {card['subtotal']:.2f}; {charges_str}; grand total "
+                f"Rs {card['total']:.2f}. Kitchen has it. The order is now placed — do NOT "
+                "call view_order or say there's no order afterward; the cart is empty by design."
+            )
 
     async def pc_cancel_order(params: FunctionCallParams) -> None:
         """Cancel the cart (only works before payment)."""
@@ -720,14 +753,14 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
-            cart = service.get_or_create_cart_for_customer(session.customer_id)
+            cart = _cart(service)
             if cart.status == "confirmed":
                 await params.result_callback(
                     "Already confirmed — please speak to the manager."
@@ -738,11 +771,91 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             except ValueError as e:
                 await params.result_callback(str(e))
                 return
-            new_cart = service.get_or_create_cart_for_customer(session.customer_id)
+            new_cart = _cart(service)
             card = order_to_card(new_cart, menu_repo)
 
         await push_ui_event(params.llm, "cart_view", card)
         await params.result_callback("Cart cancelled.")
+
+    # --- Dine-in tools ----------------------------------------------------
+
+    async def pc_set_table(params: FunctionCallParams, table: str) -> None:
+        """Bind this dine-in call to a table by its number (voice fallback).
+
+        Only needed when the guest did NOT scan the table's QR — ask them for
+        their table number (or the number printed on the QR tent card) and pass
+        it here. Once set, you can take their order.
+
+        Args:
+            table: The table number/label the guest gives (e.g. "5", "table 7").
+        """
+        stop = _loop_guard("pc_set_table", table)
+        if stop:
+            await params.result_callback(stop)
+            return
+
+        raw = table.strip()
+        cand = raw[5:].strip() if raw.lower().startswith("table") else raw
+        with get_session() as db:
+            from db.repositories.table_repo import TableRepo
+            from db.repositories.zone_repo import ZoneRepo
+
+            trepo = TableRepo(db)
+            t = (
+                trepo.get_by_qr_token(raw)
+                or trepo.get_by_label(cand)
+                or trepo.get_by_label(raw)
+            )
+            if not t or not t.active:
+                await params.result_callback(
+                    f"No table '{table}' found here. Ask the guest to read the "
+                    "number on their table again, slowly."
+                )
+                return
+            zone = ZoneRepo(db).get_by_id(t.zone_id)
+            label = t.label
+            zone_name = zone.name if zone else None
+            is_ac = bool(zone.is_ac) if zone else False
+            session.seat(table_id=t.id, table_label=label, zone_name=zone_name, is_ac=is_ac)
+
+        await params.result_callback(
+            f"Got it — Table {label} in {zone_name or 'the dining room'}. "
+            "You can take their order now."
+        )
+
+    async def pc_request_bill(params: FunctionCallParams) -> None:
+        """Signal staff to bring the bill and settle the table.
+
+        Call when a dine-in guest is finished and wants to pay.
+        """
+        stop = _loop_guard("pc_request_bill", "")
+        if stop:
+            await params.result_callback(stop)
+            return
+        if session.order_type != "dine_in" or not session.is_seated:
+            await params.result_callback("There's no table to bill on this call.")
+            return
+        if not session.table_session_id:
+            await params.result_callback(
+                "Nothing's been ordered yet, so there's no bill. Would they like to order?"
+            )
+            return
+
+        with get_session() as db:
+            service = OrderService(db)
+            try:
+                service.request_bill(session.table_session_id)
+            except ValueError as e:
+                await params.result_callback(str(e))
+                return
+
+        await push_ui_event(
+            params.llm, "bill_requested", {"table_label": session.table_label}
+        )
+        await params.result_callback(
+            "Bill requested — staff have been notified. Tell the guest someone "
+            "will be right over with the bill to settle up, and thank them warmly."
+        )
 
     # --- Order history ----------------------------------------------------
 
@@ -764,8 +877,8 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if not session.is_identified:
-            await params.result_callback(_NEED_CUSTOMER)
+        if not session.can_order:
+            await params.result_callback(_need_msg())
             return
 
         status = (status or "").strip().lower()
@@ -852,24 +965,34 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             msg = f"Restaurant (IST): {rest}"
         await params.result_callback(msg)
 
-    return [
-        pc_search_menu,
-        pc_filter_menu,
-        pc_get_menu_categories,
-        pc_lookup_customer,
-        pc_register_customer,
-        pc_update_customer,
-        pc_check_delivery_area,
+    shared_menu = [pc_search_menu, pc_filter_menu, pc_get_menu_categories]
+    shared_cart = [
         pc_view_order,
         pc_add_to_order,
         pc_update_quantity,
         pc_remove_from_order,
         pc_confirm_order,
         pc_cancel_order,
-        pc_search_my_orders,
-        pc_end_conversation,
-        pc_get_current_datetime,
     ]
+    tail = [pc_end_conversation, pc_get_current_datetime]
+
+    if session.order_type == "dine_in":
+        # Dine-in: no customer identification or delivery; seat + bill instead.
+        return shared_menu + [pc_set_table] + shared_cart + [pc_request_bill] + tail
+
+    # Parcel (default): customer identity + delivery-area + order history.
+    return (
+        shared_menu
+        + [
+            pc_lookup_customer,
+            pc_register_customer,
+            pc_update_customer,
+            pc_check_delivery_area,
+        ]
+        + shared_cart
+        + [pc_search_my_orders]
+        + tail
+    )
 
 
 # --- Pipeline factory ---------------------------------------------------
@@ -878,11 +1001,15 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
 def create_pipeline(
     websocket: WebSocket,
     user_timezone: str | None = None,
+    table_token: str | None = None,
 ):
     """Create a fresh Gemini Live Native Audio pipeline per connection.
 
-    The connection starts anonymous; the agent identifies the caller mid-call
-    and the shared CallSession carries that identity to the cart/order tools.
+    Parcel calls start anonymous; the agent identifies the caller mid-call.
+    Dine-in calls arrive with a ``table_token`` (the guest scanned the table's
+    QR) — we resolve it and seat the session up front so the agent skips
+    identification/delivery and builds the table's tab. The shared CallSession
+    carries this to the cart/order tools.
     """
     if not GOOGLE_API_KEY:
         raise RuntimeError(
@@ -901,13 +1028,32 @@ def create_pipeline(
         ),
     )
 
-    # Fresh per-connection time context prepended to the base prompt.
-    system_instruction = (
-        build_time_context_message(user_timezone) + "\n\n" + SYSTEM_PROMPT
-    )
-
     # One mutable session shared by all tool wrappers for this connection.
     session = CallSession()
+    if table_token:
+        # Dine-in: bind to the scanned table. Stay in dine-in mode even if the
+        # token doesn't resolve — the agent will ask for the table via set_table.
+        session.order_type = "dine_in"
+        try:
+            with get_session() as db:
+                info = TableService(db).resolve_qr(table_token)
+            session.seat(
+                table_id=info["table_id"],
+                table_label=info["label"],
+                zone_name=info["zone_name"],
+                is_ac=info["is_ac"],
+            )
+            logger.info(
+                f"Dine-in call seated at Table {info['label']} ({info['zone_name']}, "
+                f"AC={info['is_ac']})"
+            )
+        except ValueError:
+            logger.warning("Dine-in table_token didn't resolve — agent will ask for the table")
+
+    # Fresh per-connection time context prepended to the mode-appropriate prompt.
+    system_instruction = (
+        build_time_context_message(user_timezone) + "\n\n" + build_system_prompt(session)
+    )
 
     # Collect tool schemas up front. Pass tools at init time ONLY — if we also
     # put them on the LLMContext, Pipecat treats that as a change-at-runtime

@@ -34,23 +34,30 @@ class AuthService:
             raise ValueError(f"Invalid token: {e}")
 
     def issue_ws_ticket(
-        self, user_id: str | None = None, timezone: str | None = None
+        self,
+        user_id: str | None = None,
+        timezone: str | None = None,
+        table_token: str | None = None,
     ) -> str:
-        """Issue a single-use WS ticket carrying optional timezone.
+        """Issue a single-use WS ticket carrying optional timezone + table token.
 
         The voice line is public, so ``user_id`` is optional (anonymous parcel
-        callers). Payload is JSON so we can extend it without breaking tickets.
+        callers). ``table_token`` binds a dine-in call to a table (the guest
+        scanned its QR). Payload is JSON so we can extend it without breaking
+        tickets.
         """
         ticket = str(uuid.uuid4())
-        payload = json.dumps({"user_id": user_id, "timezone": timezone})
+        payload = json.dumps(
+            {"user_id": user_id, "timezone": timezone, "table_token": table_token}
+        )
         self.redis.setex(f"ticket:{ticket}", 30, payload.encode())
         return ticket
 
     def consume_ws_ticket(self, ticket: str) -> dict | None:
-        """Consume a WS ticket, returning {user_id, timezone} or None.
+        """Consume a WS ticket, returning {user_id, timezone, table_token} or None.
 
         Returns None only when the ticket is missing/expired — a valid
-        anonymous ticket returns {"user_id": None, "timezone": ...}.
+        anonymous ticket returns {"user_id": None, "timezone": ..., "table_token": ...}.
         """
         key = f"ticket:{ticket}"
         value = self.redis.get(key)
@@ -61,11 +68,15 @@ class AuthService:
         try:
             data = json.loads(raw)
             if isinstance(data, dict):
-                return {"user_id": data.get("user_id"), "timezone": data.get("timezone")}
+                return {
+                    "user_id": data.get("user_id"),
+                    "timezone": data.get("timezone"),
+                    "table_token": data.get("table_token"),
+                }
         except (ValueError, TypeError):
             pass
         # Back-compat: old tickets stored the raw user_id string.
-        return {"user_id": raw, "timezone": None}
+        return {"user_id": raw, "timezone": None, "table_token": None}
 
 
 # Module-level singleton for use outside FastAPI DI (e.g. dependencies.py)

@@ -54,7 +54,21 @@ ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 # Restaurant bill policy. Service charge + GST are quoted by the agent and
 # displayed on every cart/order card sent to the frontend. Keep in sync with
 # the "Restaurant Policies" section of agent/brain.py.
+#
+# Legacy flat list — kept for any external reader. The active engine is the
+# context-aware CHARGE_POLICY below (see services/billing.py).
 BILL_CHARGES: list[dict] = [
     {"label": "Service charge (10%)", "rate": 0.10},
     {"label": "GST (5%)", "rate": 0.05},
+]
+
+# Context-aware charge policy. Each charge declares WHEN it applies:
+#   applies_to: "all" | "dine_in" | "parcel"
+#   ac_only:    True  -> only for dine-in orders seated in an AC zone
+# Order is the display order on the bill. Parcel bills stay exactly as before
+# (service + GST); dine-in in an AC zone additionally gets the AC charge.
+CHARGE_POLICY: list[dict] = [
+    {"key": "service", "label": "Service charge (10%)", "rate": 0.10, "applies_to": "all"},
+    {"key": "ac",      "label": "AC charge (5%)",       "rate": 0.05, "applies_to": "dine_in", "ac_only": True},
+    {"key": "gst",     "label": "GST (5%)",             "rate": 0.05, "applies_to": "all"},
 ]

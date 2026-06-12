@@ -22,7 +22,19 @@ from pipecat.pipeline.task import PipelineTask
 from config import ADMIN_EMAIL, ADMIN_PASSWORD, MAX_SESSION_SECONDS
 from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline
-from routers import admin, auth, customers, menu, orders, service_areas
+from routers import (
+    admin,
+    analytics,
+    auth,
+    customers,
+    menu,
+    orders,
+    service_areas,
+    settings,
+    table_sessions,
+    tables,
+    zones,
+)
 from services.auth_service import auth_service
 from services.ratelimit import acquire_slot, release_slot
 
@@ -40,10 +52,16 @@ async def lifespan(app: FastAPI):
     # Seed data on startup
     with get_session() as db:
         from db.seeds.areas_seed import seed_service_areas
+        from db.seeds.floor_seed import seed_floor
         from db.seeds.menu_seed import seed_admin, seed_menu
         seed_menu(db)
         seed_admin(db, email=ADMIN_EMAIL, password=ADMIN_PASSWORD)
         seed_service_areas(db)
+        seed_floor(db)
+        # Seed the default bill charge policy + prime the billing cache so
+        # compute_bill uses the admin-editable policy from the first request.
+        from services.settings_service import SettingsService
+        SettingsService(db).load_into_cache()
         logger.info("Database seeded")
 
     # Backfill semantic-search embeddings for any menu items missing them.
@@ -85,6 +103,11 @@ app.include_router(orders.router)
 app.include_router(admin.router)
 app.include_router(customers.router)
 app.include_router(service_areas.router)
+app.include_router(zones.router)
+app.include_router(tables.router)
+app.include_router(table_sessions.router)
+app.include_router(settings.router)
+app.include_router(analytics.router)
 
 
 # --- Voice WebSocket endpoint ---
@@ -103,6 +126,7 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     user_timezone = payload.get("timezone")
+    table_token = payload.get("table_token")
     ip = _client_ip(websocket)
     call_id = uuid.uuid4().hex
 
@@ -126,7 +150,9 @@ async def websocket_endpoint(websocket: WebSocket):
         f"Voice client connected (anonymous parcel line): {ip} tz={user_timezone}"
     )
 
-    pipeline = create_pipeline(websocket, user_timezone=user_timezone)
+    pipeline = create_pipeline(
+        websocket, user_timezone=user_timezone, table_token=table_token
+    )
     task = PipelineTask(pipeline)
 
     # Kick Gemini Live into a ready state. The service only becomes ready for

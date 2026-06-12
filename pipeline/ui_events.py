@@ -12,24 +12,9 @@ from typing import Any
 from pipecat.frames.frames import OutputTransportMessageUrgentFrame
 from pipecat.services.llm_service import LLMService
 
-from config import BILL_CHARGES
-
-
-def compute_bill(subtotal: float) -> dict:
-    """Apply the restaurant's charges (service + GST) on top of a subtotal.
-
-    Returns {subtotal, charges: [{label, amount}], total}.
-    """
-    charges = [
-        {"label": c["label"], "rate": c["rate"], "amount": subtotal * c["rate"]}
-        for c in BILL_CHARGES
-    ]
-    total = subtotal + sum(c["amount"] for c in charges)
-    return {
-        "subtotal": subtotal,
-        "charges": charges,
-        "total": total,
-    }
+# Canonical billing lives in services.billing; re-exported here so existing
+# callers (`from pipeline.ui_events import compute_bill`) keep working.
+from services.billing import bill_for_order, compute_bill  # noqa: F401
 
 
 async def push_ui_event(llm: LLMService, event_type: str, payload: Any) -> None:
@@ -101,16 +86,33 @@ def order_item_to_card(item, menu_repo) -> dict:
 
 
 def order_to_card(order, menu_repo) -> dict:
-    """Order ORM → UI card dict with full bill breakdown."""
+    """Order ORM → UI card dict with full bill breakdown.
+
+    Bill is context-aware (dine-in/parcel, AC zone) and prefers the frozen
+    snapshot on confirmed orders. Dine-in fields are included so the frontend can
+    render a table header / running tab; the parcel UI simply ignores them.
+    """
     items = [order_item_to_card(i, menu_repo) for i in order.items]
-    subtotal = sum(i["line_total"] for i in items)
-    bill = compute_bill(subtotal)
+    bill = bill_for_order(order)
+
+    def _iso(dt):
+        return dt.isoformat() if dt else None
+
     return {
         "id": order.id,
         "status": order.status,
-        "created_at": order.created_at.isoformat() if order.created_at else None,
-        "confirmed_at": order.confirmed_at.isoformat() if order.confirmed_at else None,
-        "paid_at": order.paid_at.isoformat() if order.paid_at else None,
+        "order_type": order.order_type,
+        # Dine-in context (None for parcel orders).
+        "table_id": order.table_id,
+        "table_session_id": order.table_session_id,
+        "zone_name": order.zone_name,
+        "is_ac": order.is_ac,
+        "created_at": _iso(order.created_at),
+        "confirmed_at": _iso(order.confirmed_at),
+        "served_at": _iso(order.served_at),
+        "ready_at": _iso(order.ready_at),
+        "delivered_at": _iso(order.delivered_at),
+        "paid_at": _iso(order.paid_at),
         "items": items,
         "item_count": sum(i["quantity"] for i in items),
         "subtotal": bill["subtotal"],

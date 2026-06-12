@@ -34,11 +34,27 @@ class OrderRepo:
             .first()
         )
 
+    def get_cart_for_table(self, table_id: str) -> Order | None:
+        """The current in-progress dine-in cart for a table (one at a time)."""
+        return (
+            self.db.query(Order)
+            .filter(Order.table_id == table_id, Order.status == "cart")
+            .first()
+        )
+
     def get_all_for_customer(self, customer_id: str) -> list[Order]:
         return (
             self.db.query(Order)
             .filter(Order.customer_id == customer_id)
             .order_by(Order.created_at.desc())
+            .all()
+        )
+
+    def list_for_table_session(self, table_session_id: str) -> list[Order]:
+        return (
+            self.db.query(Order)
+            .filter(Order.table_session_id == table_session_id)
+            .order_by(Order.created_at)
             .all()
         )
 
@@ -49,8 +65,12 @@ class OrderRepo:
             q = q.filter(Order.status.in_(statuses))
         return q.order_by(Order.created_at.desc()).all()
 
-    def create(self, user_id: str | None = None, customer_id: str | None = None) -> Order:
-        order = Order(user_id=user_id, customer_id=customer_id)
+    def create(
+        self, user_id: str | None = None, customer_id: str | None = None, **fields
+    ) -> Order:
+        """Create an order. ``fields`` may set dine-in columns (order_type,
+        table_id, table_session_id, zone_name, is_ac)."""
+        order = Order(user_id=user_id, customer_id=customer_id, **fields)
         self.db.add(order)
         self.db.flush()
         return order

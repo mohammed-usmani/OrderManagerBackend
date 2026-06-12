@@ -15,10 +15,13 @@ from db.base import get_db
 from db.models.customer import Customer
 from db.models.menu import MenuItem
 from db.models.order import Order, OrderItem
+from db.models.restaurant_table import RestaurantTable
 from db.models.user import User
 from dependencies import require_admin
 from pipeline.ui_events import compute_bill
 from routers.menu import MenuItemResponse
+from services import order_lifecycle as lifecycle
+from services.billing import bill_for_order
 from services.menu_service import MenuService
 from services.order_service import OrderService
 
@@ -53,6 +56,9 @@ class AdminOrderResponse(BaseModel):
     order_type: str
     created_at: datetime
     confirmed_at: datetime | None
+    served_at: datetime | None
+    ready_at: datetime | None
+    delivered_at: datetime | None
     paid_at: datetime | None
     customer_email: str
     customer_name: str
@@ -61,6 +67,14 @@ class AdminOrderResponse(BaseModel):
     delivery_address: str | None
     delivery_area: str | None
     delivery_pincode: str | None
+    # Dine-in context (None for parcel orders).
+    table_id: str | None
+    table_label: str | None
+    table_session_id: str | None
+    zone_name: str | None
+    is_ac: bool | None
+    # The statuses this order may legally move to next (drives the KDS buttons).
+    next_statuses: list[str]
     item_count: int
     subtotal: float
     charges: list[AdminBillCharge]
@@ -69,12 +83,13 @@ class AdminOrderResponse(BaseModel):
 
 
 class UpdateStatusRequest(BaseModel):
-    status: str  # one of: awaiting_payment | paid | cancelled
+    status: str  # any legal lifecycle target (validated by the state machine)
 
 
 # --- Helpers ---
 
-_VALID_TRANSITIONS = {"awaiting_payment", "paid", "cancelled"}
+# Kitchen board default view: everything still needing work.
+_ACTIVE_STATUSES = sorted(lifecycle.OPEN_STATUSES)
 
 
 def _serialize_order(order, db) -> AdminOrderResponse:
@@ -100,8 +115,8 @@ def _serialize_order(order, db) -> AdminOrderResponse:
                 special_instructions=oi.special_instructions,
             )
         )
-    subtotal = sum(i.line_total for i in items)
-    bill = compute_bill(subtotal)
+    # Context-aware bill, preferring the snapshot frozen at confirm time.
+    bill = bill_for_order(order)
     # Prefer the snapshot frozen on the order at confirm time; fall back to the
     # live customer record for in-progress carts.
     contact_name = order.contact_name or (parcel_customer.name if parcel_customer else None)
@@ -111,12 +126,17 @@ def _serialize_order(order, db) -> AdminOrderResponse:
     delivery_pincode = order.delivery_pincode or (parcel_customer.pincode if parcel_customer else None)
     customer_name = contact_name or (user.name if user else "")
 
+    table = db.get(RestaurantTable, order.table_id) if order.table_id else None
+
     return AdminOrderResponse(
         id=order.id,
         status=order.status,
         order_type=order.order_type,
         created_at=order.created_at,
         confirmed_at=order.confirmed_at,
+        served_at=order.served_at,
+        ready_at=order.ready_at,
+        delivered_at=order.delivered_at,
         paid_at=order.paid_at,
         customer_email=user.email if user else "",
         customer_name=customer_name or "",
@@ -125,6 +145,12 @@ def _serialize_order(order, db) -> AdminOrderResponse:
         delivery_address=delivery_address,
         delivery_area=delivery_area,
         delivery_pincode=delivery_pincode,
+        table_id=order.table_id,
+        table_label=table.label if table else None,
+        table_session_id=order.table_session_id,
+        zone_name=order.zone_name,
+        is_ac=order.is_ac,
+        next_statuses=sorted(lifecycle.allowed_next(order.order_type or "parcel", order.status)),
         item_count=sum(i.quantity for i in items),
         subtotal=bill["subtotal"],
         charges=[AdminBillCharge(**c) for c in bill["charges"]],
@@ -150,7 +176,7 @@ def list_orders(
     `status=all` returns every order. Anything else is treated as an exact status.
     """
     if status is None or status == "active":
-        target = ["confirmed", "awaiting_payment"]
+        target = _ACTIVE_STATUSES
     elif status == "all":
         target = None
     else:
@@ -167,26 +193,16 @@ def update_order_status(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
-    """Transition an order's status. Valid targets: awaiting_payment | paid | cancelled."""
-    new_status = req.status.strip().lower()
-    if new_status not in _VALID_TRANSITIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid target status '{new_status}'. Valid: {sorted(_VALID_TRANSITIONS)}",
-        )
+    """Advance an order along its lifecycle (validated by the state machine).
 
+    Dine-in: confirmed → cooking → served → paid.
+    Parcel:  confirmed → cooking → ready → delivered → paid.
+    Either may be cancelled before payment.
+    """
+    new_status = req.status.strip().lower()
     service = OrderService(db)
     try:
-        if new_status == "awaiting_payment":
-            service.mark_awaiting_payment(order_id)
-        elif new_status == "paid":
-            # Allow paid from confirmed too — step through awaiting_payment.
-            order = service.get_order_admin(order_id)
-            if order.status == "confirmed":
-                service.mark_awaiting_payment(order_id)
-            service.mark_paid(order_id)
-        elif new_status == "cancelled":
-            service.cancel_order(order_id)
+        service.advance_status(order_id, new_status)
         db.commit()
     except ValueError as e:
         db.rollback()
