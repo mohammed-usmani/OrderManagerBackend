@@ -131,6 +131,10 @@ class TableService:
             "is_ac": zone.is_ac,
             "display_order": zone.display_order,
             "active": zone.active,
+            "pos_x": zone.pos_x,
+            "pos_y": zone.pos_y,
+            "width": zone.width,
+            "height": zone.height,
             "tables": [
                 {
                     "id": t.id,

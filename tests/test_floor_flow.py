@@ -68,6 +68,54 @@ def test_resolve_qr_includes_floor(db):
     assert info["is_ac"] is True
 
 
+def test_zone_created_with_geometry(db):
+    floor = FloorService(db).create_floor(name=f"Floor-{uuid.uuid4().hex[:5]}")
+    zone = ZoneService(db).create_zone(
+        name=f"Z-{uuid.uuid4().hex[:5]}", floor_id=floor.id,
+        pos_x=120, pos_y=80, width=400, height=300,
+    )
+    assert (zone.pos_x, zone.pos_y, zone.width, zone.height) == (120, 80, 400, 300)
+
+
+def test_zone_defaults_geometry_when_omitted(db):
+    floor = FloorService(db).create_floor(name=f"Floor-{uuid.uuid4().hex[:5]}")
+    zone = ZoneService(db).create_zone(name=f"Z-{uuid.uuid4().hex[:5]}", floor_id=floor.id)
+    # NOT NULL columns get the model defaults — never None for the frontend.
+    assert zone.pos_x is not None and zone.width is not None
+
+
+def test_zone_save_positions_bulk(db):
+    _, zone, _ = _floor_zone_table(db)
+    n = ZoneService(db).save_positions(
+        [{"zone_id": zone.id, "pos_x": 300, "pos_y": 150, "width": 500, "height": 360}]
+    )
+    assert n == 1
+    db.refresh(zone)
+    assert (zone.pos_x, zone.pos_y, zone.width, zone.height) == (300, 150, 500, 360)
+
+
+def test_floor_map_includes_zone_geometry(db):
+    floor, zone, _ = _floor_zone_table(db)
+    fmap = TableService(db).floor_map()
+    f = next(x for x in fmap if x["id"] == floor.id)
+    z = next(x for x in f["zones"] if x["id"] == zone.id)
+    assert {"pos_x", "pos_y", "width", "height"} <= set(z)
+
+
+def test_table_drop_reassigns_zone(db):
+    # Two zones on one floor; moving a table to the other zone (drop-to-assign).
+    floor = FloorService(db).create_floor(name=f"Floor-{uuid.uuid4().hex[:5]}")
+    z1 = ZoneService(db).create_zone(name=f"A-{uuid.uuid4().hex[:5]}", floor_id=floor.id)
+    z2 = ZoneService(db).create_zone(name=f"B-{uuid.uuid4().hex[:5]}", floor_id=floor.id)
+    table = TableService(db).create_table(zone_id=z1.id, label="X", seats=2)
+    # frontend persists drop-to-assign via the table positions endpoint
+    TableService(db).save_positions(
+        [{"table_id": table.id, "zone_id": z2.id, "pos_x": 50, "pos_y": 50}]
+    )
+    db.refresh(table)
+    assert table.zone_id == z2.id
+
+
 def test_dine_in_order_snapshots_floor(db):
     mi = _menu_item(db, 500.0)
     floor, zone, table = _floor_zone_table(db, is_ac=True)

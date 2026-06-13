@@ -17,21 +17,24 @@ from db.repositories.table_repo import TableRepo
 from db.repositories.zone_repo import ZoneRepo
 
 # floor name, display_order, [ (zone name, is_ac, zone display_order,
-#                               [(table label, seats)]) ]
-FLOORS: list[tuple[str, int, list[tuple[str, bool, int, list[tuple[str, int]]]]]] = [
+#                               rect (x, y, w, h), [(table label, seats)]) ]
+FLOORS = [
     (
         "Ground Floor",
         0,
         [
-            ("AC Hall", True, 1, [("1", 2), ("2", 2), ("3", 4), ("4", 4), ("5", 6), ("6", 6)]),
-            ("Garden", False, 2, [("G1", 2), ("G2", 4), ("G3", 4), ("G4", 6)]),
+            ("AC Hall", True, 1, (40, 40, 560, 560),
+             [("1", 2), ("2", 2), ("3", 4), ("4", 4), ("5", 6), ("6", 6)]),
+            ("Garden", False, 2, (640, 40, 320, 560),
+             [("G1", 2), ("G2", 4), ("G3", 4), ("G4", 6)]),
         ],
     ),
     (
         "Rooftop",
         1,
         [
-            ("Rooftop Lounge", False, 1, [("R1", 2), ("R2", 2), ("R3", 4), ("R4", 6)]),
+            ("Rooftop Lounge", False, 1, (40, 40, 920, 560),
+             [("R1", 2), ("R2", 2), ("R3", 4), ("R4", 6)]),
         ],
     ),
 ]
@@ -61,13 +64,14 @@ def seed_floor(db) -> None:
             floor = floor_repo.create(name=floor_name, display_order=floor_order)
             added_floors += 1
 
-        slot = 0  # running grid index across the whole floor
-        for zone_name, is_ac, zone_order, tables in zones:
+        for zone_name, is_ac, zone_order, rect, tables in zones:
+            zx, zy, zw, zh = rect
             zone = zone_repo.get_by_name(zone_name)
             if not zone:
                 zone = DiningZone(
                     name=zone_name, is_ac=is_ac, display_order=zone_order,
                     active=True, floor_id=floor.id,
+                    pos_x=zx, pos_y=zy, width=zw, height=zh,
                 )
                 db.add(zone)
                 db.flush()
@@ -76,11 +80,13 @@ def seed_floor(db) -> None:
                 zone.floor_id = floor.id  # attach legacy zone to its floor
                 db.flush()
 
+            # Lay this zone's tables out in a grid INSIDE its rectangle.
+            cols = max(1, (zw - 80) // 120)
             existing = {t.label: t for t in table_repo.list_all(zone_id=zone.id)}
-            for label, seats in tables:
-                col, row = slot % _COLS, slot // _COLS
-                pos_x, pos_y = _X0 + col * _CELL_W, _Y0 + row * _CELL_H
-                slot += 1
+            for i, (label, seats) in enumerate(tables):
+                col, row = i % cols, i // cols
+                pos_x = zx + 60 + col * 120
+                pos_y = zy + 70 + row * 110
                 t = existing.get(label)
                 if t is None:
                     db.add(RestaurantTable(

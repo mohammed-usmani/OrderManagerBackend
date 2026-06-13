@@ -20,6 +20,10 @@ class ZoneResponse(BaseModel):
     is_ac: bool
     display_order: int
     active: bool
+    pos_x: int
+    pos_y: int
+    width: int
+    height: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -31,6 +35,10 @@ class CreateZoneRequest(BaseModel):
     is_ac: bool = False
     display_order: int = 0
     active: bool = True
+    pos_x: int | None = None
+    pos_y: int | None = None
+    width: int | None = None
+    height: int | None = None
 
 
 class UpdateZoneRequest(BaseModel):
@@ -39,6 +47,22 @@ class UpdateZoneRequest(BaseModel):
     is_ac: bool | None = None
     display_order: int | None = None
     active: bool | None = None
+    pos_x: int | None = None
+    pos_y: int | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+class ZonePosition(BaseModel):
+    zone_id: str
+    pos_x: int | None = None
+    pos_y: int | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+class SaveZonePositionsRequest(BaseModel):
+    zones: list[ZonePosition]
 
 
 @router.get("", response_model=list[ZoneResponse])
@@ -52,9 +76,23 @@ def create_zone(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
-    zone = ZoneService(db).create_zone(**req.model_dump())
+    # exclude_none so omitted geometry falls back to the model's defaults
+    # (the columns are NOT NULL).
+    zone = ZoneService(db).create_zone(**req.model_dump(exclude_none=True))
     db.commit()
     return zone
+
+
+@router.patch("/positions")
+def save_zone_positions(
+    req: SaveZonePositionsRequest,
+    db: Session = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """Bulk-save zone rectangles after drag/resize in the floor-plan builder."""
+    updated = ZoneService(db).save_positions([z.model_dump() for z in req.zones])
+    db.commit()
+    return {"updated": updated}
 
 
 @router.patch("/{zone_id}", response_model=ZoneResponse)

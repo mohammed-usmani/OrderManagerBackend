@@ -32,6 +32,12 @@ class DiningZone(Base):
     # Ordering hint for the floor map / admin lists.
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Zone region on the floor-plan canvas (logical coords; top-left + size).
+    # Tables dropped inside this rectangle are auto-assigned to the zone.
+    pos_x: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    pos_y: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, default=320, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, default=220, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

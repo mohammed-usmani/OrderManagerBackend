@@ -30,6 +30,23 @@ class ZoneService:
             raise ValueError("Zone not found")
         return zone
 
+    def save_positions(self, updates: list[dict]) -> int:
+        """Bulk-apply zone rectangles: [{zone_id, pos_x, pos_y, width, height}].
+
+        Skips unknown zones; only sets provided (non-None) fields. Returns count.
+        """
+        n = 0
+        for u in updates:
+            zone = self.repo.get_by_id(u.get("zone_id"))
+            if not zone:
+                continue
+            for key in ("pos_x", "pos_y", "width", "height"):
+                if u.get(key) is not None:
+                    setattr(zone, key, u[key])
+            n += 1
+        self.db.flush()
+        return n
+
     def delete_zone(self, zone_id: str) -> None:
         if not self.repo.get_by_id(zone_id):
             raise ValueError("Zone not found")
