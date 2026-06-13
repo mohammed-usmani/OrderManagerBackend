@@ -27,6 +27,7 @@ from routers import (
     analytics,
     auth,
     customers,
+    floors,
     menu,
     orders,
     service_areas,
@@ -103,6 +104,7 @@ app.include_router(orders.router)
 app.include_router(admin.router)
 app.include_router(customers.router)
 app.include_router(service_areas.router)
+app.include_router(floors.router)
 app.include_router(zones.router)
 app.include_router(tables.router)
 app.include_router(table_sessions.router)

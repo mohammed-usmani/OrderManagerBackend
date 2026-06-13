@@ -89,6 +89,7 @@ class AnalyticsService:
             "parcel": {"orders": 0, "revenue": 0.0},
         }
         zones: dict[str, dict] = {}
+        floors: dict[str, dict] = {}
         item_stats: dict[str, dict] = {}
         for o in billable:
             kind = "dine_in" if o.order_type == "dine_in" else "parcel"
@@ -99,6 +100,10 @@ class AnalyticsService:
                 z = zones.setdefault(zname, {"zone": zname, "orders": 0, "revenue": 0.0})
                 z["orders"] += 1
                 z["revenue"] += self._revenue(o)
+                fname = o.floor_name or "Unassigned"
+                fl = floors.setdefault(fname, {"floor": fname, "orders": 0, "revenue": 0.0})
+                fl["orders"] += 1
+                fl["revenue"] += self._revenue(o)
             for oi in o.items:
                 line = float(oi.price_at_order) * oi.quantity
                 st = item_stats.setdefault(
@@ -145,6 +150,7 @@ class AnalyticsService:
             "avg_ticket": (revenue_total / n_billable) if n_billable else 0.0,
             "split": split,
             "by_zone": sorted(zones.values(), key=lambda z: -z["revenue"]),
+            "by_floor": sorted(floors.values(), key=lambda f: -f["revenue"]),
             "top_items": top_items,
             "dine_in_sessions": sessions,
             "active_tables": tables_total,

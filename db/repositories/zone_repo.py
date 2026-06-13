@@ -19,10 +19,14 @@ class ZoneRepo:
             .first()
         )
 
-    def list_all(self, active_only: bool = False) -> list[DiningZone]:
+    def list_all(
+        self, active_only: bool = False, floor_id: str | None = None
+    ) -> list[DiningZone]:
         q = self.db.query(DiningZone)
         if active_only:
             q = q.filter(DiningZone.active == True)  # noqa: E712
+        if floor_id is not None:
+            q = q.filter(DiningZone.floor_id == floor_id)
         return q.order_by(DiningZone.display_order, DiningZone.name).all()
 
     def create(self, **kwargs) -> DiningZone:

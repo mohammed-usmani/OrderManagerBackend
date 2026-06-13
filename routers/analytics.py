@@ -39,6 +39,12 @@ class ZoneStat(BaseModel):
     revenue: float
 
 
+class FloorStat(BaseModel):
+    floor: str
+    orders: int
+    revenue: float
+
+
 class TopItem(BaseModel):
     menu_item_id: str
     name: str
@@ -57,6 +63,7 @@ class OverviewResponse(BaseModel):
     avg_ticket: float
     split: dict[str, SplitBucket]
     by_zone: list[ZoneStat]
+    by_floor: list[FloorStat]
     top_items: list[TopItem]
     dine_in_sessions: int
     active_tables: int

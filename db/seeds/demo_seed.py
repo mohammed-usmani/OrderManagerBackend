@@ -88,14 +88,21 @@ def _ensure_customers(db, n=6) -> list[Customer]:
 
 def _make_order(db, menu, *, order_type, status, when, table=None, zone=None, customer=None):
     """Build a fully-formed order with backdated timestamps + frozen bill."""
+    from db.models.floor import Floor
+
     lines = random.sample(menu, k=random.randint(1, 4))
     is_ac = bool(zone.is_ac) if zone else False
+    floor_name = None
+    if zone is not None and zone.floor_id:
+        fl = db.get(Floor, zone.floor_id)
+        floor_name = fl.name if fl else None
     order = Order(
         order_type=order_type,
         status=status,
         customer_id=customer.id if customer else None,
         table_id=table.id if table else None,
         zone_name=zone.name if zone else None,
+        floor_name=floor_name,
         is_ac=is_ac,
         created_at=when,
         updated_at=when,

@@ -5,8 +5,11 @@ Also owns the dine-in seating helpers the voice flow will call in Phase 4
 written here so the data rules live in one place.
 """
 
+from collections import defaultdict
+
 from sqlalchemy.orm import Session
 
+from db.repositories.floor_repo import FloorRepo
 from db.repositories.order_repo import OrderRepo
 from db.repositories.table_repo import TableRepo
 from db.repositories.table_session_repo import TableSessionRepo
@@ -20,6 +23,7 @@ class TableService:
         self.db = db
         self.repo = TableRepo(db)
         self.zone_repo = ZoneRepo(db)
+        self.floor_repo = FloorRepo(db)
         self.session_repo = TableSessionRepo(db)
         self.order_repo = OrderRepo(db)
 
@@ -59,11 +63,12 @@ class TableService:
     # --- QR resolution (public) ---
 
     def resolve_qr(self, qr_token: str) -> dict:
-        """Resolve a scanned QR token → table + zone context for the voice app."""
+        """Resolve a scanned QR token → table + zone + floor context."""
         table = self.repo.get_by_qr_token(qr_token)
         if not table or not table.active:
             raise ValueError("Unknown or inactive table")
         zone = self.zone_repo.get_by_id(table.zone_id)
+        floor = self.floor_repo.get_by_id(zone.floor_id) if zone and zone.floor_id else None
         return {
             "table_id": table.id,
             "label": table.label,
@@ -71,42 +76,97 @@ class TableService:
             "zone_id": zone.id if zone else None,
             "zone_name": zone.name if zone else None,
             "is_ac": bool(zone.is_ac) if zone else False,
+            "floor_id": floor.id if floor else None,
+            "floor_name": floor.name if floor else None,
         }
 
     # --- Live floor map ---
 
     def floor_map(self) -> list[dict]:
-        """Zones (with their tables and any live session) for the admin map."""
+        """Floors → zones → tables (with live session) for the admin floor plan.
+
+        Zones with no/unknown floor_id fall into a synthetic "Unassigned" bucket
+        so nothing is ever hidden.
+        """
         sessions = {s.table_id: s for s in self.session_repo.list_active()}
+        zones_by_floor: dict[str | None, list] = defaultdict(list)
+        for z in self.zone_repo.list_all():
+            zones_by_floor[z.floor_id].append(z)
+
         out: list[dict] = []
-        for zone in self.zone_repo.list_all():
-            tables = []
-            for t in self.repo.list_all(zone_id=zone.id):
-                sess = sessions.get(t.id)
-                tables.append(
-                    {
-                        "id": t.id,
-                        "label": t.label,
-                        "seats": t.seats,
-                        "pos_x": t.pos_x,
-                        "pos_y": t.pos_y,
-                        "qr_token": t.qr_token,
-                        "status": t.status,
-                        "active": t.active,
-                        "session": self._session_summary(sess) if sess else None,
-                    }
-                )
+        known: set[str] = set()
+        for floor in self.floor_repo.list_all():
+            known.add(floor.id)
             out.append(
                 {
-                    "id": zone.id,
-                    "name": zone.name,
-                    "is_ac": zone.is_ac,
-                    "display_order": zone.display_order,
-                    "active": zone.active,
-                    "tables": tables,
+                    "id": floor.id,
+                    "name": floor.name,
+                    "display_order": floor.display_order,
+                    "active": floor.active,
+                    "width": floor.width,
+                    "height": floor.height,
+                    "zones": [self._zone_dict(z, sessions) for z in zones_by_floor.get(floor.id, [])],
+                }
+            )
+
+        orphan = [z for fid, zs in zones_by_floor.items() if fid not in known for z in zs]
+        if orphan:
+            out.append(
+                {
+                    "id": None,
+                    "name": "Unassigned",
+                    "display_order": 9999,
+                    "active": True,
+                    "width": 1000,
+                    "height": 640,
+                    "zones": [self._zone_dict(z, sessions) for z in orphan],
                 }
             )
         return out
+
+    def _zone_dict(self, zone, sessions: dict) -> dict:
+        return {
+            "id": zone.id,
+            "name": zone.name,
+            "is_ac": zone.is_ac,
+            "display_order": zone.display_order,
+            "active": zone.active,
+            "tables": [
+                {
+                    "id": t.id,
+                    "label": t.label,
+                    "seats": t.seats,
+                    "pos_x": t.pos_x,
+                    "pos_y": t.pos_y,
+                    "shape": t.shape,
+                    "qr_token": t.qr_token,
+                    "status": t.status,
+                    "active": t.active,
+                    "session": self._session_summary(sessions[t.id]) if t.id in sessions else None,
+                }
+                for t in self.repo.list_all(zone_id=zone.id)
+            ],
+        }
+
+    def save_positions(self, updates: list[dict]) -> int:
+        """Bulk-apply table layout edits: [{table_id, pos_x, pos_y, shape?, zone_id?}].
+
+        Skips unknown tables; validates any zone reassignment. Returns the count
+        of tables updated.
+        """
+        n = 0
+        for u in updates:
+            table = self.repo.get_by_id(u.get("table_id"))
+            if not table:
+                continue
+            if u.get("zone_id") is not None and not self.zone_repo.get_by_id(u["zone_id"]):
+                raise ValueError(f"Zone '{u['zone_id']}' not found")
+            for key in ("pos_x", "pos_y", "shape", "zone_id"):
+                if key in u and u[key] is not None:
+                    setattr(table, key, u[key])
+            n += 1
+        self.db.flush()
+        return n
 
     # --- Table session detail / receipt ---
 
@@ -120,6 +180,7 @@ class TableService:
             raise ValueError("Table session not found")
         table = self.repo.get_by_id(sess.table_id) if sess.table_id else None
         zone = self.zone_repo.get_by_id(table.zone_id) if table else None
+        floor = self.floor_repo.get_by_id(zone.floor_id) if zone and zone.floor_id else None
         menu_repo = MenuRepo(self.db)
 
         orders_out: list[dict] = []
@@ -159,6 +220,7 @@ class TableService:
             "party_size": sess.party_size,
             "table_label": table.label if table else None,
             "zone_name": zone.name if zone else None,
+            "floor_name": floor.name if floor else None,
             "is_ac": bool(zone.is_ac) if zone else False,
             "orders": orders_out,
             "grand_subtotal": grand_subtotal,

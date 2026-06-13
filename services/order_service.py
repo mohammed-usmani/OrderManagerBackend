@@ -41,6 +41,7 @@ class OrderService:
         table_id: str,
         zone_name: str | None = None,
         is_ac: bool = False,
+        floor_name: str | None = None,
     ) -> Order:
         """Dine-in cart bound to a table's running tab (TableSession).
 
@@ -64,6 +65,7 @@ class OrderService:
             table_id=table_id,
             table_session_id=sess.id,
             zone_name=zone_name,
+            floor_name=floor_name,
             is_ac=is_ac,
         )
         self.chat_repo.create_session(order_id=cart.id)

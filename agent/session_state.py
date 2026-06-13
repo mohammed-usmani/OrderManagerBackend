@@ -25,6 +25,7 @@ class CallSession:
     table_label: str | None = None
     table_session_id: str | None = None
     zone_name: str | None = None
+    floor_name: str | None = None
     is_ac: bool = False
 
     def identify(self, customer) -> None:
@@ -32,12 +33,13 @@ class CallSession:
         self.customer_code = customer.code
         self.customer_name = customer.name
 
-    def seat(self, *, table_id, table_label, zone_name, is_ac) -> None:
+    def seat(self, *, table_id, table_label, zone_name, is_ac, floor_name=None) -> None:
         """Bind this (dine-in) call to a table."""
         self.order_type = "dine_in"
         self.table_id = table_id
         self.table_label = table_label
         self.zone_name = zone_name
+        self.floor_name = floor_name
         self.is_ac = bool(is_ac)
 
     @property

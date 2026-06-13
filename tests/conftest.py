@@ -19,6 +19,7 @@ def setup_test_db():
     import db.models.chat  # noqa: F401
     import db.models.customer  # noqa: F401
     import db.models.service_area  # noqa: F401
+    import db.models.floor  # noqa: F401
     import db.models.dining_zone  # noqa: F401
     import db.models.restaurant_table  # noqa: F401
     import db.models.table_session  # noqa: F401

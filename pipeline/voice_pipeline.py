@@ -119,7 +119,10 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         """The active cart for this call — table tab (dine-in) or customer (parcel)."""
         if session.order_type == "dine_in":
             cart = service.get_or_create_cart_for_table(
-                session.table_id, zone_name=session.zone_name, is_ac=session.is_ac
+                session.table_id,
+                zone_name=session.zone_name,
+                is_ac=session.is_ac,
+                floor_name=session.floor_name,
             )
             session.table_session_id = cart.table_session_id
             return cart
@@ -797,6 +800,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         raw = table.strip()
         cand = raw[5:].strip() if raw.lower().startswith("table") else raw
         with get_session() as db:
+            from db.repositories.floor_repo import FloorRepo
             from db.repositories.table_repo import TableRepo
             from db.repositories.zone_repo import ZoneRepo
 
@@ -813,10 +817,15 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
                 )
                 return
             zone = ZoneRepo(db).get_by_id(t.zone_id)
+            floor = FloorRepo(db).get_by_id(zone.floor_id) if zone and zone.floor_id else None
             label = t.label
             zone_name = zone.name if zone else None
             is_ac = bool(zone.is_ac) if zone else False
-            session.seat(table_id=t.id, table_label=label, zone_name=zone_name, is_ac=is_ac)
+            floor_name = floor.name if floor else None
+            session.seat(
+                table_id=t.id, table_label=label, zone_name=zone_name,
+                is_ac=is_ac, floor_name=floor_name,
+            )
 
         await params.result_callback(
             f"Got it — Table {label} in {zone_name or 'the dining room'}. "
@@ -1042,6 +1051,7 @@ def create_pipeline(
                 table_label=info["label"],
                 zone_name=info["zone_name"],
                 is_ac=info["is_ac"],
+                floor_name=info.get("floor_name"),
             )
             logger.info(
                 f"Dine-in call seated at Table {info['label']} ({info['zone_name']}, "

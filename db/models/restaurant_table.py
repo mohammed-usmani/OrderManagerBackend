@@ -40,6 +40,8 @@ class RestaurantTable(Base):
     # Floor-map coordinates (admin drag-to-place layout). Nullable until placed.
     pos_x: Mapped[int | None] = mapped_column(Integer)
     pos_y: Mapped[int | None] = mapped_column(Integer)
+    # Visual shape on the floor plan: round | square | rect.
+    shape: Mapped[str] = mapped_column(String, default="round", nullable=False)
 
     # Encoded in the QR tent card → /t/<qr_token>. Unique + indexed for lookup.
     qr_token: Mapped[str] = mapped_column(

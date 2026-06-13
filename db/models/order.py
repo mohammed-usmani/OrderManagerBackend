@@ -13,6 +13,7 @@ from db.base import Base
 # dining_zones they reference) are registered with the mapper registry whenever
 # Order is loaded — Order is imported everywhere it's used, so this guarantees
 # its foreign keys always resolve. These modules only depend on Base (no cycle).
+import db.models.floor  # noqa: F401, E402
 import db.models.dining_zone  # noqa: F401, E402
 import db.models.restaurant_table  # noqa: F401, E402
 import db.models.table_session  # noqa: F401, E402
@@ -56,6 +57,7 @@ class Order(Base):
         String, ForeignKey("table_sessions.id"), nullable=True, index=True
     )
     zone_name: Mapped[str | None] = mapped_column(String)
+    floor_name: Mapped[str | None] = mapped_column(String)
     is_ac: Mapped[bool | None] = mapped_column(Boolean)
 
     # Bill snapshot, frozen at confirm so historical totals don't drift when the

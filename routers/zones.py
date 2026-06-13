@@ -15,6 +15,7 @@ router = APIRouter(prefix="/zones", tags=["zones"])
 
 class ZoneResponse(BaseModel):
     id: str
+    floor_id: str | None
     name: str
     is_ac: bool
     display_order: int
@@ -26,6 +27,7 @@ class ZoneResponse(BaseModel):
 
 class CreateZoneRequest(BaseModel):
     name: str
+    floor_id: str | None = None
     is_ac: bool = False
     display_order: int = 0
     active: bool = True
@@ -33,6 +35,7 @@ class CreateZoneRequest(BaseModel):
 
 class UpdateZoneRequest(BaseModel):
     name: str | None = None
+    floor_id: str | None = None
     is_ac: bool | None = None
     display_order: int | None = None
     active: bool | None = None

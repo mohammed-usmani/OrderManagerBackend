@@ -9,7 +9,7 @@ admin floor map is organised by.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
@@ -21,6 +21,11 @@ class DiningZone(Base):
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
+    # The floor this zone sits on. Nullable for back-compat (legacy zones are
+    # backfilled onto a default "Ground Floor" by the floors migration).
+    floor_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("floors.id"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String, nullable=False)
     # Drives the AC surcharge for dine-in orders seated in this zone.
     is_ac: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -31,6 +36,9 @@ class DiningZone(Base):
         DateTime, default=datetime.utcnow, nullable=False
     )
 
+    floor: Mapped["Floor"] = relationship(  # noqa: F821
+        "Floor", back_populates="zones"
+    )
     tables: Mapped[list["RestaurantTable"]] = relationship(  # noqa: F821
         "RestaurantTable", back_populates="zone"
     )

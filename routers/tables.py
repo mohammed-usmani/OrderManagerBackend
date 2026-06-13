@@ -22,6 +22,7 @@ class TableResponse(BaseModel):
     seats: int
     pos_x: int | None
     pos_y: int | None
+    shape: str
     qr_token: str
     status: str
     active: bool
@@ -36,6 +37,7 @@ class CreateTableRequest(BaseModel):
     seats: int = 2
     pos_x: int | None = None
     pos_y: int | None = None
+    shape: str = "round"
     active: bool = True
 
 
@@ -45,8 +47,21 @@ class UpdateTableRequest(BaseModel):
     seats: int | None = None
     pos_x: int | None = None
     pos_y: int | None = None
+    shape: str | None = None
     status: str | None = None
     active: bool | None = None
+
+
+class TablePosition(BaseModel):
+    table_id: str
+    pos_x: int | None = None
+    pos_y: int | None = None
+    shape: str | None = None
+    zone_id: str | None = None
+
+
+class SavePositionsRequest(BaseModel):
+    tables: list[TablePosition]
 
 
 class ResolveTableResponse(BaseModel):
@@ -56,6 +71,8 @@ class ResolveTableResponse(BaseModel):
     zone_id: str | None
     zone_name: str | None
     is_ac: bool
+    floor_id: str | None
+    floor_name: str | None
 
 
 # --- Public: resolve a scanned QR token (no auth — it's how diners start) ---
@@ -97,6 +114,23 @@ def create_table(
         db.commit()
         return table
     except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# Bulk layout save — declared before /{table_id} so "positions" isn't captured
+# as a table id.
+@router.patch("/positions")
+def save_positions(
+    req: SavePositionsRequest,
+    db: Session = Depends(get_db),
+    _=Depends(require_admin),
+):
+    try:
+        updated = TableService(db).save_positions([t.model_dump() for t in req.tables])
+        db.commit()
+        return {"updated": updated}
+    except ValueError as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
 
 

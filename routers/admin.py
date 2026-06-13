@@ -72,6 +72,7 @@ class AdminOrderResponse(BaseModel):
     table_label: str | None
     table_session_id: str | None
     zone_name: str | None
+    floor_name: str | None
     is_ac: bool | None
     # The statuses this order may legally move to next (drives the KDS buttons).
     next_statuses: list[str]
@@ -149,6 +150,7 @@ def _serialize_order(order, db) -> AdminOrderResponse:
         table_label=table.label if table else None,
         table_session_id=order.table_session_id,
         zone_name=order.zone_name,
+        floor_name=order.floor_name,
         is_ac=order.is_ac,
         next_statuses=sorted(lifecycle.allowed_next(order.order_type or "parcel", order.status)),
         item_count=sum(i.quantity for i in items),
