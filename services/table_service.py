@@ -105,6 +105,10 @@ class TableService:
         zones_by_floor: dict[str | None, list] = defaultdict(list)
         for z in self.zone_repo.list_all():
             zones_by_floor[z.floor_id].append(z)
+        # Prefetch ALL tables once and group by zone (avoids a query per zone).
+        tables_by_zone: dict[str, list] = defaultdict(list)
+        for t in self.repo.list_all():
+            tables_by_zone[t.zone_id].append(t)
 
         out: list[dict] = []
         known: set[str] = set()
@@ -118,7 +122,10 @@ class TableService:
                     "active": floor.active,
                     "width": floor.width,
                     "height": floor.height,
-                    "zones": [self._zone_dict(z, sessions) for z in zones_by_floor.get(floor.id, [])],
+                    "zones": [
+                        self._zone_dict(z, sessions, tables_by_zone.get(z.id, []))
+                        for z in zones_by_floor.get(floor.id, [])
+                    ],
                 }
             )
 
@@ -132,12 +139,15 @@ class TableService:
                     "active": True,
                     "width": 1000,
                     "height": 640,
-                    "zones": [self._zone_dict(z, sessions) for z in orphan],
+                    "zones": [
+                        self._zone_dict(z, sessions, tables_by_zone.get(z.id, []))
+                        for z in orphan
+                    ],
                 }
             )
         return out
 
-    def _zone_dict(self, zone, sessions: dict) -> dict:
+    def _zone_dict(self, zone, sessions: dict, tables: list) -> dict:
         return {
             "id": zone.id,
             "name": zone.name,
@@ -161,7 +171,7 @@ class TableService:
                     "active": t.active,
                     "session": self._session_summary(sessions[t.id]) if t.id in sessions else None,
                 }
-                for t in self.repo.list_all(zone_id=zone.id)
+                for t in sorted(tables, key=lambda x: x.label)
             ],
         }
 

@@ -10,11 +10,10 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from db.models.order import Order
 from services.billing import bill_for_order
-from services.menu_service import MenuService
 from services.order_lifecycle import DINE_IN
 
 RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
@@ -55,7 +54,8 @@ class AnalyticsService:
         self.db = db
 
     def _orders(self, range_key: str) -> list[Order]:
-        q = self.db.query(Order)
+        # Eager-load items so per-order revenue/subtotal don't trigger N+1 lazy loads.
+        q = self.db.query(Order).options(selectinload(Order.items))
         start = range_start(range_key)
         if start is not None:
             q = q.filter(Order.created_at >= start)
@@ -119,15 +119,15 @@ class AnalyticsService:
                 st["quantity"] += oi.quantity
                 st["revenue"] += line
 
-        # name the top items
-        menu_service = MenuService(self.db)
-        top_items = []
-        for st in sorted(item_stats.values(), key=lambda s: -s["quantity"])[:8]:
-            try:
-                name = menu_service.get_item(st["menu_item_id"], include_unavailable=True).name
-            except ValueError:
-                name = st["menu_item_id"]
-            top_items.append({**st, "name": name})
+        # name the top items — one batched query for the names, not N lookups.
+        from db.models.menu import MenuItem
+
+        top = sorted(item_stats.values(), key=lambda s: -s["quantity"])[:8]
+        ids = [s["menu_item_id"] for s in top]
+        names = dict(
+            self.db.query(MenuItem.id, MenuItem.name).filter(MenuItem.id.in_(ids)).all()
+        ) if ids else {}
+        top_items = [{**s, "name": names.get(s["menu_item_id"], s["menu_item_id"])} for s in top]
 
         # dine-in table sessions opened in the window (turnover)
         from db.models.restaurant_table import RestaurantTable
