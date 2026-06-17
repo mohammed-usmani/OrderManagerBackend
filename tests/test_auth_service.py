@@ -7,6 +7,7 @@ from services.auth_service import AuthService
 def auth_service():
     mock_redis = MagicMock()
     mock_redis.getdel.return_value = None
+    mock_redis.get.return_value = None  # not revoked / no login failures
     return AuthService(redis_client=mock_redis)
 
 

@@ -1,5 +1,7 @@
 """User service: registration and login."""
 
+import re
+
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,19 @@ from db.models.user import User
 from db.repositories.user_repo import UserRepo
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD_LEN = 8
+
+
+def validate_registration(email: str, password: str, name: str) -> None:
+    """Public sign-up input policy (enforced at the API boundary, not on the
+    internal register() path so seeding/admin provisioning isn't constrained)."""
+    if not _EMAIL_RE.match((email or "").strip().lower()):
+        raise ValueError("Enter a valid email address")
+    if len(password or "") < MIN_PASSWORD_LEN:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    if not (name or "").strip():
+        raise ValueError("Name is required")
 
 
 class UserService:

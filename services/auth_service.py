@@ -1,6 +1,7 @@
 """Auth service: JWT creation/validation and Redis-backed WS tickets."""
 
 import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -8,6 +9,10 @@ import redis as redis_lib
 from jose import JWTError, jwt
 
 from config import JWT_ALGORITHM, JWT_EXPIRE_DAYS, JWT_SECRET_KEY, REDIS_URL
+
+# Login brute-force protection.
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECONDS = 900  # 15 min
 
 
 class AuthService:
@@ -18,20 +23,76 @@ class AuthService:
             self.redis = redis_client
 
     def create_access_token(self, user_id: str, email: str, is_admin: bool) -> str:
-        expire = datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRE_DAYS)
+        now = datetime.now(timezone.utc)
         payload = {
             "sub": user_id,
             "email": email,
             "is_admin": is_admin,
-            "exp": expire,
+            "iat": now,
+            "jti": uuid.uuid4().hex,  # unique id → enables revocation
+            "exp": now + timedelta(days=JWT_EXPIRE_DAYS),
         }
         return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
     def decode_token(self, token: str) -> dict:
         try:
-            return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         except JWTError as e:
             raise ValueError(f"Invalid token: {e}")
+        jti = payload.get("jti")
+        if jti:
+            try:
+                revoked = self.redis.get(f"revoked:{jti}")
+            except Exception:
+                revoked = None  # Redis down — fail open (don't lock everyone out)
+            if revoked:
+                raise ValueError("Token has been revoked")
+        return payload
+
+    def revoke_token(self, token: str) -> None:
+        """Deny-list a token's jti until it would naturally expire (logout)."""
+        try:
+            payload = jwt.decode(
+                token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM],
+                options={"verify_exp": False},
+            )
+        except JWTError:
+            return
+        jti, exp = payload.get("jti"), payload.get("exp")
+        if not jti:
+            return
+        ttl = int(exp - time.time()) if exp else 3600
+        if ttl <= 0:
+            return
+        try:
+            self.redis.setex(f"revoked:{jti}", ttl, b"1")
+        except Exception:
+            pass
+
+    # --- login brute-force lockout (fail-open if Redis is unavailable) ---
+
+    def _login_key(self, email: str) -> str:
+        return f"login_fail:{(email or '').strip().lower()}"
+
+    def login_locked(self, email: str) -> bool:
+        try:
+            return int(self.redis.get(self._login_key(email)) or 0) >= LOGIN_MAX_FAILS
+        except Exception:
+            return False
+
+    def record_login_failure(self, email: str) -> None:
+        try:
+            key = self._login_key(email)
+            if self.redis.incr(key) == 1:
+                self.redis.expire(key, LOGIN_LOCK_SECONDS)
+        except Exception:
+            pass
+
+    def clear_login_failures(self, email: str) -> None:
+        try:
+            self.redis.delete(self._login_key(email))
+        except Exception:
+            pass
 
     def issue_ws_ticket(
         self,
