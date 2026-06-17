@@ -32,7 +32,7 @@ class CustomerRepo:
             self.db.query(Customer).filter(Customer.code == code).count() > 0
         )
 
-    def search(self, query: str | None = None, limit: int = 100) -> list[Customer]:
+    def _search_query(self, query: str | None):
         q = self.db.query(Customer)
         if query:
             like = f"%{query.strip()}%"
@@ -44,7 +44,31 @@ class CustomerRepo:
                     Customer.area.ilike(like),
                 )
             )
-        return q.order_by(Customer.last_order_at.desc().nullslast(), Customer.created_at.desc()).limit(limit).all()
+        return q
+
+    def search(self, query: str | None = None, limit: int = 100) -> list[Customer]:
+        return (
+            self._search_query(query)
+            .order_by(Customer.last_order_at.desc().nullslast(), Customer.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def search_page(
+        self, query: str | None = None, limit: int = 20, offset: int = 0
+    ) -> tuple[list[Customer], int]:
+        """Return one page of matches plus the total match count."""
+        base = self._search_query(query)
+        total = base.order_by(None).count()
+        items = (
+            base.order_by(
+                Customer.last_order_at.desc().nullslast(), Customer.created_at.desc()
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return items, total
 
     def create(self, **kwargs) -> Customer:
         customer = Customer(**kwargs)

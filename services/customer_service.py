@@ -132,3 +132,8 @@ class CustomerService:
 
     def search(self, query: str | None = None, limit: int = 100) -> list[Customer]:
         return self.repo.search(query=query, limit=limit)
+
+    def search_page(
+        self, query: str | None = None, limit: int = 20, offset: int = 0
+    ) -> tuple[list[Customer], int]:
+        return self.repo.search_page(query=query, limit=limit, offset=offset)

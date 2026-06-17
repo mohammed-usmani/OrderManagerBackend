@@ -68,13 +68,23 @@ class CustomerOrderSummary(BaseModel):
     total: float
 
 
-@router.get("", response_model=list[CustomerResponse])
+class CustomerPage(BaseModel):
+    items: list[CustomerResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("", response_model=CustomerPage)
 def list_customers(
     search: str | None = Query(default=None, description="Match code, phone, name, or area"),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
-    return CustomerService(db).search(query=search)
+    items, total = CustomerService(db).search_page(query=search, limit=limit, offset=offset)
+    return CustomerPage(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
