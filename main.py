@@ -122,7 +122,14 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4001)
         return
 
-    payload = auth_service.consume_ws_ticket(ticket)
+    # Consuming the ticket hits Redis — if Redis is down, close cleanly with the
+    # auth code instead of letting the exception bubble (no socket close).
+    try:
+        payload = auth_service.consume_ws_ticket(ticket)
+    except Exception as e:
+        logger.warning(f"ws-ticket consume failed (redis?): {e}")
+        await websocket.close(code=4001)
+        return
     if not payload:
         await websocket.close(code=4001)
         return
@@ -148,75 +155,79 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.warning(f"close after rate-limit failed: {e}")
         return
 
-    logger.info(
-        f"Voice client connected (anonymous parcel line): {ip} tz={user_timezone}"
-    )
+    # Slot is held from here — wrap EVERYTHING that follows so a failure during
+    # pipeline construction can't leak the concurrency slot.
+    cap_task = None
+    try:
+        logger.info(
+            f"Voice client connected (anonymous parcel line): {ip} tz={user_timezone}"
+        )
 
-    pipeline = create_pipeline(
-        websocket, user_timezone=user_timezone, table_token=table_token
-    )
-    task = PipelineTask(pipeline)
+        pipeline = create_pipeline(
+            websocket, user_timezone=user_timezone, table_token=table_token
+        )
+        task = PipelineTask(pipeline)
 
-    # Kick Gemini Live into a ready state. The service only becomes ready for
-    # realtime audio after its _handle_context runs, which only fires on a
-    # context frame. The user aggregator pushes a context frame when it
-    # receives an LLMRunFrame, so we emit one right as the pipeline starts.
-    @task.event_handler("on_pipeline_started")
-    async def _kickstart(_task, _frame):
-        await _task.queue_frames([LLMRunFrame()])
+        # Kick Gemini Live into a ready state. The service only becomes ready for
+        # realtime audio after its _handle_context runs, which only fires on a
+        # context frame. The user aggregator pushes a context frame when it
+        # receives an LLMRunFrame, so we emit one right as the pipeline starts.
+        @task.event_handler("on_pipeline_started")
+        async def _kickstart(_task, _frame):
+            await _task.queue_frames([LLMRunFrame()])
 
-    runner = PipelineRunner(handle_sigint=False)
+        runner = PipelineRunner(handle_sigint=False)
 
-    # Hard cap on call length: a watchdog tells the client WHY the call is
-    # ending (so it's clearly a demo limit, not a crash), then gracefully ends
-    # the pipeline so no one can hold a call (and CPU) open indefinitely.
-    async def _session_cap():
-        warn = 60  # seconds of heads-up before the hard cut
-        try:
-            if MAX_SESSION_SECONDS > warn:
-                await asyncio.sleep(MAX_SESSION_SECONDS - warn)
+        # Hard cap on call length: a watchdog tells the client WHY the call is
+        # ending (so it's clearly a demo limit, not a crash), then gracefully ends
+        # the pipeline so no one can hold a call (and CPU) open indefinitely.
+        async def _session_cap():
+            warn = 60  # seconds of heads-up before the hard cut
+            try:
+                if MAX_SESSION_SECONDS > warn:
+                    await asyncio.sleep(MAX_SESSION_SECONDS - warn)
+                    try:
+                        await task.queue_frames([
+                            OutputTransportMessageUrgentFrame(message={
+                                "kind": "ui_event",
+                                "event": "time_warning",
+                                "data": {"seconds_left": warn},
+                            })
+                        ])
+                    except Exception:
+                        pass
+                    await asyncio.sleep(warn)
+                else:
+                    await asyncio.sleep(MAX_SESSION_SECONDS)
+                mins = MAX_SESSION_SECONDS // 60
+                logger.info(f"Voice session hit the {MAX_SESSION_SECONDS}s cap — ending: {ip}")
                 try:
                     await task.queue_frames([
                         OutputTransportMessageUrgentFrame(message={
                             "kind": "ui_event",
-                            "event": "time_warning",
-                            "data": {"seconds_left": warn},
+                            "event": "session_end",
+                            "data": {
+                                "reason": "time_limit",
+                                "message": (
+                                    f"We cap each call at {mins} minutes on this demo so the "
+                                    "shared kitchen CPU stays free for everyone. Tap the mic "
+                                    "to start a fresh call whenever you like."
+                                ),
+                            },
                         })
                     ])
+                    await asyncio.sleep(0.6)  # let the notice reach the client first
                 except Exception:
                     pass
-                await asyncio.sleep(warn)
-            else:
-                await asyncio.sleep(MAX_SESSION_SECONDS)
-            mins = MAX_SESSION_SECONDS // 60
-            logger.info(f"Voice session hit the {MAX_SESSION_SECONDS}s cap — ending: {ip}")
-            try:
-                await task.queue_frames([
-                    OutputTransportMessageUrgentFrame(message={
-                        "kind": "ui_event",
-                        "event": "session_end",
-                        "data": {
-                            "reason": "time_limit",
-                            "message": (
-                                f"We cap each call at {mins} minutes on this demo so the "
-                                "shared kitchen CPU stays free for everyone. Tap the mic "
-                                "to start a fresh call whenever you like."
-                            ),
-                        },
-                    })
-                ])
-                await asyncio.sleep(0.6)  # let the notice reach the client first
-            except Exception:
-                pass
-            await task.cancel()
-        except asyncio.CancelledError:
-            pass  # call ended normally before the cap
+                await task.cancel()
+            except asyncio.CancelledError:
+                pass  # call ended normally before the cap
 
-    cap_task = asyncio.create_task(_session_cap())
-    try:
+        cap_task = asyncio.create_task(_session_cap())
         await runner.run(task)
     finally:
-        cap_task.cancel()
+        if cap_task is not None:
+            cap_task.cancel()
         release_slot(call_id)
     logger.info(f"Voice client disconnected: {ip}")
 

@@ -163,9 +163,11 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         with get_session() as db:
             service = MenuService(db)
             items: list = []
-            # Exact ID hit first (e.g. "M01").
+            # Exact ID hit first (e.g. "M01"). Include unavailable so an exact
+            # ID for a temporarily-unavailable dish surfaces it (the card shows
+            # the unavailable state) rather than falling through to fuzzy search.
             try:
-                items = [service.get_item(query.strip().upper())]
+                items = [service.get_item(query.strip().upper(), include_unavailable=True)]
             except ValueError:
                 items = service.search(query)
 
@@ -376,6 +378,15 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         stop = _loop_guard("pc_register_customer", sig)
         if stop:
             await params.result_callback(stop)
+            return
+
+        # Don't run a delivery-area check on an empty locality — that would push
+        # a confusing blank delivery_check card and a false "outside area" refusal.
+        if not (area or "").strip() and not (pincode or "").strip():
+            await params.result_callback(
+                "I still need their delivery area or pincode before I can register "
+                "them — ask for the locality (and pincode if they know it)."
+            )
             return
 
         with get_session() as db:

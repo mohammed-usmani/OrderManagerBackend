@@ -2,6 +2,7 @@
 
 import re
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from agent.restaurant.codes import generate_unique_code
@@ -97,18 +98,28 @@ class CustomerService:
                 return existing
 
         code = generate_unique_code(self.repo.code_exists)
-        return self.repo.create(
-            code=code,
-            phone=norm_phone,
-            name=name,
-            address_line=address_line,
-            area=area,
-            pincode=pincode,
-            landmark=landmark,
-            preferences=preferences,
-            allergies=allergies,
-            notes=notes,
-        )
+        try:
+            return self.repo.create(
+                code=code,
+                phone=norm_phone,
+                name=name,
+                address_line=address_line,
+                area=area,
+                pincode=pincode,
+                landmark=landmark,
+                preferences=preferences,
+                allergies=allergies,
+                notes=notes,
+            )
+        except IntegrityError:
+            # Lost a check-then-insert race on the unique phone (or code) — undo
+            # the failed insert and return the row that won.
+            self.db.rollback()
+            if norm_phone:
+                won = self.repo.get_by_phone(norm_phone)
+                if won:
+                    return won
+            raise
 
     def update_customer(self, customer_id: str, **fields) -> Customer:
         clean = {k: v for k, v in fields.items() if k in EDITABLE_FIELDS and v is not None}

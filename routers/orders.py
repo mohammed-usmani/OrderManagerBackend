@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from db.base import get_db
 from dependencies import get_current_user
-from pipeline.ui_events import compute_bill
+from services.billing import bill_for_order
 from services.order_service import OrderService
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -44,8 +44,10 @@ class OrderResponse(BaseModel):
 
 def _serialize(order) -> OrderResponse:
     items = [OrderItemResponse.model_validate(i) for i in order.items]
-    subtotal = sum(float(i.price_at_order) * i.quantity for i in order.items)
-    bill = compute_bill(subtotal)
+    # Use the bill frozen at confirm time (snapshot) so a confirmed/paid order's
+    # total never drifts when the charge policy changes; falls back to a live,
+    # context-aware computation for carts.
+    bill = bill_for_order(order)
     return OrderResponse(
         id=order.id,
         status=order.status,

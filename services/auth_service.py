@@ -60,10 +60,11 @@ class AuthService:
         anonymous ticket returns {"user_id": None, "timezone": ..., "table_token": ...}.
         """
         key = f"ticket:{ticket}"
-        value = self.redis.get(key)
+        # Atomic get-and-delete so a ticket can be redeemed exactly once (a
+        # plain get + delete lets two concurrent connects both pass).
+        value = self.redis.getdel(key)
         if value is None:
             return None
-        self.redis.delete(key)
         raw = value.decode() if isinstance(value, bytes) else value
         try:
             data = json.loads(raw)

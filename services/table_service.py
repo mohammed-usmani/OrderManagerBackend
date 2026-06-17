@@ -7,6 +7,7 @@ written here so the data rules live in one place.
 
 from collections import defaultdict
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.repositories.floor_repo import FloorRepo
@@ -58,7 +59,14 @@ class TableService:
             raise ValueError("Table not found")
         if self.session_repo.get_open_for_table(table_id):
             raise ValueError("Table has an open session; settle it first")
-        self.repo.delete(table_id)
+        try:
+            self.repo.delete(table_id)
+        except IntegrityError:
+            # Closed sessions / past orders still reference this table.
+            self.db.rollback()
+            raise ValueError(
+                "Table has order history; deactivate it instead of deleting"
+            )
 
     # --- QR resolution (public) ---
 
@@ -68,7 +76,11 @@ class TableService:
         if not table or not table.active:
             raise ValueError("Unknown or inactive table")
         zone = self.zone_repo.get_by_id(table.zone_id)
+        if zone and not zone.active:
+            raise ValueError("This section is not taking orders right now")
         floor = self.floor_repo.get_by_id(zone.floor_id) if zone and zone.floor_id else None
+        if floor and not floor.active:
+            raise ValueError("This floor is not taking orders right now")
         return {
             "table_id": table.id,
             "label": table.label,

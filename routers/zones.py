@@ -78,9 +78,13 @@ def create_zone(
 ):
     # exclude_none so omitted geometry falls back to the model's defaults
     # (the columns are NOT NULL).
-    zone = ZoneService(db).create_zone(**req.model_dump(exclude_none=True))
-    db.commit()
-    return zone
+    try:
+        zone = ZoneService(db).create_zone(**req.model_dump(exclude_none=True))
+        db.commit()
+        return zone
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.patch("/positions")

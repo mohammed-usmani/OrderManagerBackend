@@ -6,14 +6,18 @@ from zoneinfo import ZoneInfo
 RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
 
 
-def _service_period_for(hour: int) -> str:
+def _service_period_for(dt: datetime) -> str:
+    # Closed Mondays (weekday 0). Lunch 11-15, dinner 18-23 IST.
+    if dt.weekday() == 0:
+        return "CLOSED today (we're closed on Mondays) — reopens Tuesday 11 AM"
+    hour = dt.hour
     if 11 <= hour < 15:
         return "lunch service"
     if 15 <= hour < 18:
         return "afternoon (kitchen reopens at 6 PM for dinner)"
     if 18 <= hour < 23:
         return "dinner service"
-    return "closed hours (we open at 11 AM)"
+    return "closed hours (we open at 11 AM, Tuesday-Sunday)"
 
 
 def _safe_zone(name: str | None) -> ZoneInfo | None:
@@ -37,7 +41,7 @@ def build_time_context_message(user_timezone: str | None = None) -> str:
     user_zone = _safe_zone(user_timezone)
 
     restaurant_time_line = now_restaurant.strftime("%A, %B %d, %Y at %I:%M %p %Z")
-    service_period = _service_period_for(now_restaurant.hour)
+    service_period = _service_period_for(now_restaurant)
 
     if user_zone:
         now_user = now_restaurant.astimezone(user_zone)

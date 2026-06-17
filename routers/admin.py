@@ -18,7 +18,6 @@ from db.models.order import Order, OrderItem
 from db.models.restaurant_table import RestaurantTable
 from db.models.user import User
 from dependencies import require_admin
-from pipeline.ui_events import compute_bill
 from routers.menu import MenuItemResponse
 from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
@@ -278,10 +277,14 @@ def analytics_summary(
 
     # Revenue counts everything except cancelled + still-in-cart.
     revenue_subtotal = 0.0
+    revenue_with_charges = 0.0
     item_stats: dict[str, dict] = {}
     for o in orders:
         if o.status in ("cancelled", "cart"):
             continue
+        # Per-order bill (frozen snapshot when present) so charges reflect each
+        # order's real context (AC/dine-in) — not parcel defaults on an aggregate.
+        revenue_with_charges += bill_for_order(o)["total"]
         for oi in o.items:
             line = float(oi.price_at_order) * oi.quantity
             revenue_subtotal += line
@@ -309,7 +312,6 @@ def analytics_summary(
             )
         )
 
-    revenue_with_charges = compute_bill(revenue_subtotal)["total"]
 
     return AnalyticsSummary(
         range=range,

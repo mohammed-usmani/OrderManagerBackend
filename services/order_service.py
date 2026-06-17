@@ -124,6 +124,17 @@ class OrderService:
             TableRepo(self.db).update(sess.table_id, status="needs_bill")
         self.db.flush()
 
+    def _assert_mutable(self, order_id: str) -> None:
+        """Items may only be changed while the order is still a cart."""
+        order = self.order_repo.get_by_id(order_id)
+        if not order:
+            raise ValueError("Order not found")
+        if order.status != "cart":
+            raise ValueError(
+                f"Cannot change items on a '{order.status}' order — it has "
+                "already been sent to the kitchen."
+            )
+
     def add_item(
         self,
         order_id: str,
@@ -131,6 +142,7 @@ class OrderService:
         quantity: int = 1,
         special_instructions: str = "",
     ):
+        self._assert_mutable(order_id)
         menu_item = self.menu_repo.get_by_id(menu_item_id)
         if not menu_item:
             raise ValueError(f"Menu item '{menu_item_id}' not found")
@@ -145,6 +157,7 @@ class OrderService:
         )
 
     def remove_item(self, order_id: str, menu_item_id: str) -> None:
+        self._assert_mutable(order_id)
         if not self.order_repo.remove_item(order_id, menu_item_id):
             raise ValueError(f"Item '{menu_item_id}' not found in order")
 
@@ -156,6 +169,7 @@ class OrderService:
         quantity <= 0 removes the line. If the item isn't in the order yet it's
         added at the requested quantity.
         """
+        self._assert_mutable(order_id)
         if quantity <= 0:
             self.order_repo.remove_item(order_id, menu_item_id)
             return None
@@ -236,6 +250,7 @@ class OrderService:
             self._on_paid(order)
         elif to_status == "cancelled":
             self._close_chat(order_id)
+            self._release_table_if_done(order)
 
         self.db.flush()
         return order
@@ -247,27 +262,33 @@ class OrderService:
             session.closed_at = datetime.utcnow()
             self.db.flush()
 
+    def _release_table_if_done(self, order: Order) -> None:
+        """Dine-in: when an order leaves the floor (paid OR cancelled) and no
+        other open orders remain on its table session, close the session and
+        free the table. Safe to call for parcel orders (no-op)."""
+        if order.order_type != "dine_in" or not order.table_session_id:
+            return
+        from db.repositories.table_repo import TableRepo
+        from db.repositories.table_session_repo import TableSessionRepo
+
+        open_others = [
+            o
+            for o in self.order_repo.list_for_table_session(order.table_session_id)
+            if o.id != order.id and o.status not in lifecycle.CLOSED_STATUSES
+        ]
+        if open_others:
+            return
+        ts = TableSessionRepo(self.db).get_by_id(order.table_session_id)
+        if ts and ts.status != "closed":
+            ts.status = "closed"
+            ts.closed_at = datetime.utcnow()
+        if ts and ts.table_id:
+            TableRepo(self.db).update(ts.table_id, status="free")
+        self.db.flush()
+
     def _on_paid(self, order: Order) -> None:
         self._close_chat(order.id)
-        # Dine-in: settling an order with no other open orders frees the table.
-        if order.order_type == "dine_in" and order.table_session_id:
-            from db.repositories.table_repo import TableRepo
-            from db.repositories.table_session_repo import TableSessionRepo
-
-            ts_repo = TableSessionRepo(self.db)
-            open_others = [
-                o
-                for o in self.order_repo.list_for_table_session(order.table_session_id)
-                if o.id != order.id and o.status not in lifecycle.CLOSED_STATUSES
-            ]
-            if not open_others:
-                ts = ts_repo.get_by_id(order.table_session_id)
-                if ts and ts.status != "closed":
-                    ts.status = "closed"
-                    ts.closed_at = datetime.utcnow()
-                if ts and ts.table_id:
-                    TableRepo(self.db).update(ts.table_id, status="free")
-                self.db.flush()
+        self._release_table_if_done(order)
 
     def get_orders_for_customer(self, customer_id: str) -> list[Order]:
         return self.order_repo.get_all_for_customer(customer_id)
@@ -280,11 +301,8 @@ class OrderService:
             raise ValueError(f"Cannot cancel order with status '{order.status}'")
         order.status = "cancelled"
         self.db.flush()
-        session = self.chat_repo.get_session_for_order(order_id)
-        if session:
-            session.status = "closed"
-            session.closed_at = datetime.utcnow()
-            self.db.flush()
+        self._close_chat(order_id)
+        self._release_table_if_done(order)  # dine-in: free the table on cancel
         return order
 
     def mark_awaiting_payment(self, order_id: str) -> Order:

@@ -2,6 +2,7 @@
 
 from sqlalchemy.orm import Session
 
+from db.repositories.floor_repo import FloorRepo
 from db.repositories.table_repo import TableRepo
 from db.repositories.zone_repo import ZoneRepo
 
@@ -22,6 +23,9 @@ class ZoneService:
         return zone
 
     def create_zone(self, **kwargs):
+        floor_id = kwargs.get("floor_id")
+        if floor_id is not None and not FloorRepo(self.db).get_by_id(floor_id):
+            raise ValueError("Floor not found")
         return self.repo.create(**kwargs)
 
     def update_zone(self, zone_id: str, **kwargs):

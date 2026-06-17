@@ -6,7 +6,7 @@ from services.auth_service import AuthService
 @pytest.fixture
 def auth_service():
     mock_redis = MagicMock()
-    mock_redis.get.return_value = None
+    mock_redis.getdel.return_value = None
     return AuthService(redis_client=mock_redis)
 
 
@@ -25,7 +25,7 @@ def test_decode_invalid_token_raises(auth_service):
 
 def test_issue_and_consume_ws_ticket(auth_service):
     import json
-    auth_service.redis.get.return_value = json.dumps(
+    auth_service.redis.getdel.return_value = json.dumps(
         {"user_id": "user-123", "timezone": "Asia/Kolkata"}
     ).encode()
     ticket = auth_service.issue_ws_ticket("user-123", timezone="Asia/Kolkata")
@@ -42,7 +42,7 @@ def test_issue_and_consume_ws_ticket(auth_service):
 def test_ws_ticket_carries_table_token(auth_service):
     # Dine-in tickets bind the call to a table (QR scan).
     import json
-    auth_service.redis.get.return_value = json.dumps(
+    auth_service.redis.getdel.return_value = json.dumps(
         {"user_id": None, "timezone": "Asia/Kolkata", "table_token": "abc123"}
     ).encode()
     ticket = auth_service.issue_ws_ticket(timezone="Asia/Kolkata", table_token="abc123")
@@ -53,12 +53,12 @@ def test_ws_ticket_carries_table_token(auth_service):
 
 def test_consume_legacy_ticket_returns_user_id(auth_service):
     # Back-compat: old tickets stored the raw user_id string.
-    auth_service.redis.get.return_value = b"user-legacy"
+    auth_service.redis.getdel.return_value = b"user-legacy"
     payload = auth_service.consume_ws_ticket("t")
     assert payload == {"user_id": "user-legacy", "timezone": None, "table_token": None}
 
 
 def test_consume_expired_ticket_returns_none(auth_service):
-    auth_service.redis.get.return_value = None
+    auth_service.redis.getdel.return_value = None
     result = auth_service.consume_ws_ticket("nonexistent-ticket")
     assert result is None

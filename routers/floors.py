@@ -52,9 +52,13 @@ def create_floor(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
-    floor = FloorService(db).create_floor(**req.model_dump())
-    db.commit()
-    return floor
+    try:
+        floor = FloorService(db).create_floor(**req.model_dump())
+        db.commit()
+        return floor
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.patch("/{floor_id}", response_model=FloorResponse)
