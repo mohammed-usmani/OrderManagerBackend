@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from db.models.order import Order
 from services.billing import bill_for_order
 from services.menu_service import MenuService
+from services.order_lifecycle import DINE_IN
 
 RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -97,7 +98,7 @@ class AnalyticsService:
         floors: dict[str, dict] = {}
         item_stats: dict[str, dict] = {}
         for o in billable:
-            kind = "dine_in" if o.order_type == "dine_in" else "parcel"
+            kind = "dine_in" if o.order_type == DINE_IN else "parcel"
             split[kind]["orders"] += 1
             split[kind]["revenue"] += self._revenue(o)
             if kind == "dine_in":
@@ -183,7 +184,7 @@ class AnalyticsService:
             rev = self._revenue(o)
             b["orders"] += 1
             b["revenue"] += rev
-            b["dine_in" if o.order_type == "dine_in" else "parcel"] += rev
+            b["dine_in" if o.order_type == DINE_IN else "parcel"] += rev
         return [buckets[k] for k in sorted(buckets)]
 
     # --- Peak hours (hour-of-day, IST) ------------------------------------

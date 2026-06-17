@@ -42,6 +42,7 @@ from pipecat.transports.websocket.fastapi import (
 
 from agent.brain import build_system_prompt, build_time_context_message
 from agent.session_state import CallSession
+from services.order_lifecycle import OrderType
 from config import GEMINI_MODEL, GEMINI_VOICE, GOOGLE_API_KEY
 from db.base import get_session
 from db.repositories.customer_repo import CustomerRepo
@@ -117,7 +118,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
 
     def _cart(service: OrderService):
         """The active cart for this call — table tab (dine-in) or customer (parcel)."""
-        if session.order_type == "dine_in":
+        if session.is_dine_in:
             cart = service.get_or_create_cart_for_table(
                 session.table_id,
                 zone_name=session.zone_name,
@@ -130,7 +131,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
 
     def _need_msg() -> str:
         """Why an order tool refused — depends on the call mode."""
-        if session.order_type == "dine_in":
+        if session.is_dine_in:
             return (
                 "I don't know which table this is yet. Ask the guest for their "
                 "table number or the code on the QR card, then call set_table."
@@ -726,7 +727,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(_need_msg())
             return
 
-        dine_in = session.order_type == "dine_in"
+        dine_in = session.is_dine_in
         with get_session() as db:
             service = OrderService(db)
             menu_repo = MenuRepo(db)
@@ -852,7 +853,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         if stop:
             await params.result_callback(stop)
             return
-        if session.order_type != "dine_in" or not session.is_seated:
+        if not session.is_dine_in or not session.is_seated:
             await params.result_callback("There's no table to bill on this call.")
             return
         if not session.table_session_id:
@@ -996,7 +997,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
     ]
     tail = [pc_end_conversation, pc_get_current_datetime]
 
-    if session.order_type == "dine_in":
+    if session.is_dine_in:
         # Dine-in: no customer identification or delivery; seat + bill instead.
         return shared_menu + [pc_set_table] + shared_cart + [pc_request_bill] + tail
 
@@ -1053,7 +1054,7 @@ def create_pipeline(
     if table_token:
         # Dine-in: bind to the scanned table. Stay in dine-in mode even if the
         # token doesn't resolve — the agent will ask for the table via set_table.
-        session.order_type = "dine_in"
+        session.order_type = OrderType.DINE_IN
         try:
             with get_session() as db:
                 info = TableService(db).resolve_qr(table_token)

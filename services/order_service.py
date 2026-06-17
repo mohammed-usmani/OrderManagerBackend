@@ -61,7 +61,7 @@ class OrderService:
         sess = ts_repo.get_open_for_table(table_id) or ts_repo.create(table_id=table_id)
         TableRepo(self.db).update(table_id, status="occupied")
         cart = self.order_repo.create(
-            order_type="dine_in",
+            order_type=lifecycle.DINE_IN,
             table_id=table_id,
             table_session_id=sess.id,
             zone_name=zone_name,
@@ -200,7 +200,7 @@ class OrderService:
         )
         bill = compute_bill(
             subtotal,
-            order_type=order.order_type or "parcel",
+            order_type=order.order_type or lifecycle.PARCEL,
             is_ac=bool(order.is_ac),
         )
         order.charges_json = bill["charges"]
@@ -210,7 +210,7 @@ class OrderService:
         order = self.order_repo.get_by_id(order_id)
         if not order:
             raise ValueError("Order not found")
-        lifecycle.assert_transition(order.order_type or "parcel", order.status, "confirmed")
+        lifecycle.assert_transition(order.order_type or lifecycle.PARCEL, order.status, "confirmed")
         if not order.items:
             raise ValueError("Cannot confirm an empty order")
         order.status = "confirmed"
@@ -243,7 +243,7 @@ class OrderService:
         order = self.order_repo.get_by_id(order_id)
         if not order:
             raise ValueError("Order not found")
-        order_type = order.order_type or "parcel"
+        order_type = order.order_type or lifecycle.PARCEL
         lifecycle.assert_transition(order_type, order.status, to_status)
         order.status = to_status
 
@@ -271,7 +271,7 @@ class OrderService:
         """Dine-in: when an order leaves the floor (paid OR cancelled) and no
         other open orders remain on its table session, close the session and
         free the table. Safe to call for parcel orders (no-op)."""
-        if order.order_type != "dine_in" or not order.table_session_id:
+        if order.order_type != lifecycle.DINE_IN or not order.table_session_id:
             return
         from db.repositories.table_repo import TableRepo
         from db.repositories.table_session_repo import TableSessionRepo

@@ -373,7 +373,7 @@ Match the guest — English, Hindi, or Hinglish, warmly and naturally. Keep dish
 
 def build_system_prompt(session=None) -> str:
     """Pick the right base prompt for the call's mode (parcel vs dine-in)."""
-    if session is not None and getattr(session, "order_type", "parcel") == "dine_in":
+    if session is not None and getattr(session, "is_dine_in", False):
         table_label = (
             f"Table {session.table_label}" if session.table_label else "your table"
         )

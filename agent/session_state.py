@@ -9,11 +9,13 @@ delivery needed. The tool wrappers share one mutable CallSession.
 
 from dataclasses import dataclass
 
+from services.order_lifecycle import OrderType
+
 
 @dataclass
 class CallSession:
-    # Mode: "parcel" (default) or "dine_in".
-    order_type: str = "parcel"
+    # Mode: OrderType.PARCEL (default) or OrderType.DINE_IN.
+    order_type: str = OrderType.PARCEL
 
     # --- Parcel: set once the agent identifies/registers the caller ---
     customer_id: str | None = None
@@ -35,7 +37,7 @@ class CallSession:
 
     def seat(self, *, table_id, table_label, zone_name, is_ac, floor_name=None) -> None:
         """Bind this (dine-in) call to a table."""
-        self.order_type = "dine_in"
+        self.order_type = OrderType.DINE_IN
         self.table_id = table_id
         self.table_label = table_label
         self.zone_name = zone_name
@@ -51,8 +53,12 @@ class CallSession:
         return self.table_id is not None
 
     @property
+    def is_dine_in(self) -> bool:
+        return self.order_type == OrderType.DINE_IN
+
+    @property
     def can_order(self) -> bool:
         """Whether cart/order tools may operate yet."""
-        if self.order_type == "dine_in":
+        if self.is_dine_in:
             return self.is_seated
         return self.is_identified

@@ -13,6 +13,18 @@ this engine needs no data migration. ``awaiting_payment`` is a legacy state that
 older parcel rows may still hold; it's allowed to settle straight to ``paid``.
 """
 
+# --- Order types (single source of truth; plain strings to match the
+# String columns and avoid str-Enum DB-binding footguns) ---
+PARCEL = "parcel"
+DINE_IN = "dine_in"
+
+
+class OrderType:
+    PARCEL = PARCEL
+    DINE_IN = DINE_IN
+
+
+# --- Order statuses ---
 CART = "cart"
 CONFIRMED = "confirmed"
 COOKING = "cooking"
@@ -47,7 +59,7 @@ _PARCEL_FLOW: dict[str, set[str]] = {
 
 
 def _flow(order_type: str) -> dict[str, set[str]]:
-    return _DINE_IN_FLOW if order_type == "dine_in" else _PARCEL_FLOW
+    return _DINE_IN_FLOW if order_type == DINE_IN else _PARCEL_FLOW
 
 
 def allowed_next(order_type: str, status: str) -> set[str]:
