@@ -68,7 +68,12 @@ class AnalyticsService:
 
     @staticmethod
     def _subtotal(order: Order) -> float:
-        return sum(float(i.price_at_order) * i.quantity for i in order.items)
+        from decimal import Decimal
+
+        from services.money import money_float
+        return money_float(
+            sum((Decimal(str(i.price_at_order)) * i.quantity for i in order.items), Decimal(0))
+        )
 
     # --- Headline overview ------------------------------------------------
 
@@ -138,6 +143,12 @@ class AnalyticsService:
             .count()
         )
 
+        from services.money import money_float
+
+        # Round all money fields to paise so accumulated sums never show drift.
+        for b in (*split.values(), *zones.values(), *floors.values(), *top_items):
+            b["revenue"] = money_float(b["revenue"])
+
         n_billable = len(billable)
         return {
             "range": range_key,
@@ -145,16 +156,16 @@ class AnalyticsService:
             "total_orders": len(orders),
             "billable_orders": n_billable,
             "orders_by_status": dict(status_counts),
-            "revenue_subtotal": revenue_subtotal,
-            "revenue_total": revenue_total,
-            "avg_ticket": (revenue_total / n_billable) if n_billable else 0.0,
+            "revenue_subtotal": money_float(revenue_subtotal),
+            "revenue_total": money_float(revenue_total),
+            "avg_ticket": money_float(revenue_total / n_billable) if n_billable else 0.0,
             "split": split,
             "by_zone": sorted(zones.values(), key=lambda z: -z["revenue"]),
             "by_floor": sorted(floors.values(), key=lambda f: -f["revenue"]),
             "top_items": top_items,
             "dine_in_sessions": sessions,
             "active_tables": tables_total,
-            "table_turnover": (sessions / tables_total) if tables_total else 0.0,
+            "table_turnover": round((sessions / tables_total), 3) if tables_total else 0.0,
         }
 
     # --- Time series (day / month / year) ---------------------------------

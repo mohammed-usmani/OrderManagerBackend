@@ -17,6 +17,7 @@ from db.repositories.table_session_repo import TableSessionRepo
 from db.repositories.zone_repo import ZoneRepo
 from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
+from services.money import money_float
 
 
 class TableService:
@@ -239,14 +240,14 @@ class TableService:
             "floor_name": floor.name if floor else None,
             "is_ac": bool(zone.is_ac) if zone else False,
             "orders": orders_out,
-            "grand_subtotal": grand_subtotal,
-            "grand_total": grand_total,
+            "grand_subtotal": money_float(grand_subtotal),
+            "grand_total": money_float(grand_total),
         }
 
     def _session_summary(self, sess) -> dict:
         orders = self.order_repo.list_for_table_session(sess.id)
         live = [o for o in orders if o.status not in lifecycle.CLOSED_STATUSES]
-        running = sum(bill_for_order(o)["total"] for o in live)
+        running = money_float(sum(bill_for_order(o)["total"] for o in live))
         return {
             "id": sess.id,
             "status": sess.status,

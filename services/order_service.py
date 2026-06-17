@@ -192,7 +192,12 @@ class OrderService:
 
     def _freeze_bill(self, order: Order) -> None:
         """Snapshot the bill onto the order so totals never drift later."""
-        subtotal = sum(float(i.price_at_order) * i.quantity for i in order.items)
+        from decimal import Decimal
+
+        from services.money import money_float
+        subtotal = money_float(
+            sum((Decimal(str(i.price_at_order)) * i.quantity for i in order.items), Decimal(0))
+        )
         bill = compute_bill(
             subtotal,
             order_type=order.order_type or "parcel",

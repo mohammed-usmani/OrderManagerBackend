@@ -9,7 +9,10 @@ like the old parcel bill (service charge + GST), so existing callers keep workin
 unchanged.
 """
 
+from decimal import Decimal
+
 from config import CHARGE_POLICY
+from services.money import money_float, to_money
 
 # Admin-editable override (DB-backed, loaded by SettingsService at startup and on
 # change). When None, the config default applies. Kept as a module cache so
@@ -41,17 +44,23 @@ def compute_bill(
     shape the frontend already renders.
     """
     rules = policy if policy is not None else active_policy()
+    sub = to_money(subtotal)
     charges: list[dict] = []
+    running = sub
     for c in rules:
         applies_to = c.get("applies_to", "all")
         if applies_to != "all" and applies_to != order_type:
             continue
         if c.get("ac_only") and not is_ac:
             continue
-        amount = subtotal * c["rate"]
-        charges.append({"label": c["label"], "rate": c["rate"], "amount": amount})
-    total = subtotal + sum(c["amount"] for c in charges)
-    return {"subtotal": subtotal, "charges": charges, "total": total}
+        amount = to_money(sub * Decimal(str(c["rate"])))  # round each charge to paise
+        charges.append({"label": c["label"], "rate": c["rate"], "amount": float(amount)})
+        running += amount
+    return {
+        "subtotal": float(sub),
+        "charges": charges,
+        "total": money_float(running),
+    }
 
 
 def bill_for_order(order) -> dict:
@@ -62,7 +71,9 @@ def bill_for_order(order) -> dict:
     back to a live computation from the order's context for carts/legacy rows.
     """
     items = list(order.items)
-    subtotal = sum(float(i.price_at_order) * i.quantity for i in items)
+    subtotal = money_float(
+        sum((to_money(i.price_at_order) * i.quantity for i in items), Decimal(0))
+    )
     if order.charges_json is not None and order.total is not None:
         return {
             "subtotal": subtotal,
