@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.models.order import Order
@@ -32,9 +33,17 @@ class OrderService:
         cart = self.order_repo.get_cart_for_customer(customer_id)
         if cart:
             return cart
-        cart = self.order_repo.create(customer_id=customer_id)
-        self.chat_repo.create_session(order_id=cart.id, customer_id=customer_id)
-        return cart
+        try:
+            cart = self.order_repo.create(customer_id=customer_id)
+            self.chat_repo.create_session(order_id=cart.id, customer_id=customer_id)
+            return cart
+        except IntegrityError:
+            # Lost the create race (uq_cart_per_customer) — return the winner.
+            self.db.rollback()
+            won = self.order_repo.get_cart_for_customer(customer_id)
+            if won:
+                return won
+            raise
 
     def get_or_create_cart_for_table(
         self,
@@ -58,18 +67,27 @@ class OrderService:
             return cart
 
         ts_repo = TableSessionRepo(self.db)
-        sess = ts_repo.get_open_for_table(table_id) or ts_repo.create(table_id=table_id)
-        TableRepo(self.db).update(table_id, status="occupied")
-        cart = self.order_repo.create(
-            order_type=lifecycle.DINE_IN,
-            table_id=table_id,
-            table_session_id=sess.id,
-            zone_name=zone_name,
-            floor_name=floor_name,
-            is_ac=is_ac,
-        )
-        self.chat_repo.create_session(order_id=cart.id)
-        return cart
+        try:
+            sess = ts_repo.get_open_for_table(table_id) or ts_repo.create(table_id=table_id)
+            TableRepo(self.db).update(table_id, status="occupied")
+            cart = self.order_repo.create(
+                order_type=lifecycle.DINE_IN,
+                table_id=table_id,
+                table_session_id=sess.id,
+                zone_name=zone_name,
+                floor_name=floor_name,
+                is_ac=is_ac,
+            )
+            self.chat_repo.create_session(order_id=cart.id)
+            return cart
+        except IntegrityError:
+            # Lost a race on the open-session or cart unique index — return the
+            # cart the winning request created for this table.
+            self.db.rollback()
+            won = self.order_repo.get_cart_for_table(table_id)
+            if won:
+                return won
+            raise
 
     def settle_table_session(self, table_session_id: str) -> list[Order]:
         """Close out a dine-in table: pay every fired round, cancel any un-fired

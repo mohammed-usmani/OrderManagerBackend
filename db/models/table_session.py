@@ -10,7 +10,7 @@ check. Lifecycle: ``open`` → ``billed`` (customer asked for the bill) → ``cl
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
@@ -18,6 +18,13 @@ from db.base import Base
 
 class TableSession(Base):
     __tablename__ = "table_sessions"
+    # At most one non-closed session per table (one live tab at a time).
+    __table_args__ = (
+        Index(
+            "uq_open_session_per_table", "table_id", unique=True,
+            postgresql_where=text("status != 'closed'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())

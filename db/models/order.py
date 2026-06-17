@@ -3,7 +3,9 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +23,18 @@ import db.models.table_session  # noqa: F401, E402
 
 class Order(Base):
     __tablename__ = "orders"
+    # At most one open 'cart' per customer (parcel) and per table (dine-in) —
+    # enforces single-cart invariants against concurrent creation races.
+    __table_args__ = (
+        Index(
+            "uq_cart_per_customer", "customer_id", unique=True,
+            postgresql_where=text("status = 'cart' AND customer_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_cart_per_table", "table_id", unique=True,
+            postgresql_where=text("status = 'cart' AND table_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())

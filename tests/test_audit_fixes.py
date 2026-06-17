@@ -90,3 +90,24 @@ def test_resolve_qr_rejects_inactive_zone(db):
     _, _, table = _floor_zone_table(db, active=False)
     with pytest.raises(ValueError):
         TableService(db).resolve_qr(table.qr_token)
+
+
+def test_only_one_open_session_per_table(db):
+    from sqlalchemy.exc import IntegrityError
+    _, _, table = _floor_zone_table(db)
+    db.add(TableSession(table_id=table.id, status="open")); db.flush()
+    db.add(TableSession(table_id=table.id, status="open"))
+    with pytest.raises(IntegrityError):
+        db.flush()
+    db.rollback()
+
+
+def test_only_one_cart_per_customer(db):
+    from sqlalchemy.exc import IntegrityError
+    from db.models.order import Order
+    cust = _customer(db)
+    db.add(Order(customer_id=cust.id, status="cart")); db.flush()
+    db.add(Order(customer_id=cust.id, status="cart"))
+    with pytest.raises(IntegrityError):
+        db.flush()
+    db.rollback()
