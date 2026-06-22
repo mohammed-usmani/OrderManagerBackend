@@ -44,11 +44,13 @@ class TicketResponse(BaseModel):
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
     try:
         validate_registration(req.email, req.password, req.name)
+        # Public sign-up never grants staff access — staff are provisioned by an
+        # owner/manager via the staff endpoints with an explicit role.
         user = UserService(db).register(req.email.strip().lower(), req.password, req.name.strip())
         db.commit()
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    token = auth_service.create_access_token(user.id, user.email, user.is_admin)
+    token = auth_service.create_access_token(user.id, user.email, user.is_admin, user.role)
     return TokenResponse(access_token=token)
 
 
@@ -68,7 +70,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
             detail="Invalid credentials",
         )
     auth_service.clear_login_failures(req.email)
-    token = auth_service.create_access_token(user.id, user.email, user.is_admin)
+    token = auth_service.create_access_token(user.id, user.email, user.is_admin, user.role)
     return TokenResponse(access_token=token)
 
 

@@ -34,10 +34,23 @@ def get_current_user(
 
 
 def require_admin(current_user=Depends(get_current_user)):
-    """Require the current user to be an admin. Raises 403 otherwise."""
+    """Require the current user to be an admin (owner/manager). 403 otherwise."""
     if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
         )
     return current_user
+
+
+def require_roles(allowed: set[str]):
+    """Build a dependency that requires the user's role to be in ``allowed``."""
+    def _dep(current_user=Depends(get_current_user)):
+        if getattr(current_user, "role", None) not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this action",
+            )
+        return current_user
+    return _dep
+

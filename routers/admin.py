@@ -17,10 +17,14 @@ from db.models.menu import MenuItem
 from db.models.order import Order, OrderItem
 from db.models.restaurant_table import RestaurantTable
 from db.models.user import User
-from dependencies import require_admin
+from dependencies import require_admin, require_roles
 from routers.menu import MenuItemResponse
 from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
+from services.roles import STAFF_ROLES
+
+# KDS (view orders + advance status) is open to any on-shift staff member.
+_require_staff = require_roles(STAFF_ROLES)
 from services.menu_service import MenuService
 from services.order_service import OrderService
 
@@ -169,7 +173,7 @@ def list_orders(
         description="Filter: 'active' (confirmed+awaiting_payment), 'all', or a specific status",
     ),
     db: Session = Depends(get_db),
-    _=Depends(require_admin),
+    _=Depends(_require_staff),
 ):
     """List orders for the kitchen dashboard.
 
@@ -192,7 +196,7 @@ def update_order_status(
     order_id: str,
     req: UpdateStatusRequest,
     db: Session = Depends(get_db),
-    _=Depends(require_admin),
+    _=Depends(_require_staff),
 ):
     """Advance an order along its lifecycle (validated by the state machine).
 

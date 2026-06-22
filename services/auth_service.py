@@ -22,12 +22,15 @@ class AuthService:
         else:
             self.redis = redis_client
 
-    def create_access_token(self, user_id: str, email: str, is_admin: bool) -> str:
+    def create_access_token(
+        self, user_id: str, email: str, is_admin: bool, role: str = "none"
+    ) -> str:
         now = datetime.now(timezone.utc)
         payload = {
             "sub": user_id,
             "email": email,
             "is_admin": is_admin,
+            "role": role,
             "iat": now,
             "jti": uuid.uuid4().hex,  # unique id → enables revocation
             "exp": now + timedelta(days=JWT_EXPIRE_DAYS),

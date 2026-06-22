@@ -54,4 +54,4 @@ def seed_admin(db: Session, email: str, password: str) -> None:
     repo = UserRepo(db)
     if repo.email_exists(email):
         return
-    UserService(db).register(email=email, password=password, name="Admin", is_admin=True)
+    UserService(db).register(email=email, password=password, name="Admin", role="owner")

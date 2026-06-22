@@ -9,8 +9,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.base import get_db
-from dependencies import require_admin
+from dependencies import require_admin, require_roles
+from services.roles import STAFF_ROLES
 from services.table_service import TableService
+
+# The live floor map is read by waiters/cashiers/managers, not just admins.
+_require_staff = require_roles(STAFF_ROLES)
 
 router = APIRouter(prefix="/tables", tags=["tables"])
 
@@ -88,7 +92,7 @@ def resolve_table(qr_token: str, db: Session = Depends(get_db)):
 # --- Admin: live floor map ---
 
 @router.get("/floor")
-def floor_map(db: Session = Depends(get_db), _=Depends(require_admin)):
+def floor_map(db: Session = Depends(get_db), _=Depends(_require_staff)):
     return TableService(db).floor_map()
 
 

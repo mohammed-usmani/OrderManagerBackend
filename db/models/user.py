@@ -19,6 +19,9 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Staff role: owner | manager | cashier | waiter | chef. is_admin stays in
+    # sync (owner/manager) for back-compat with existing admin-gated endpoints.
+    role: Mapped[str] = mapped_column(String, default="manager", server_default="manager", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
