@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +33,12 @@ class MenuItem(Base):
     # rows without an embedding still work via keyword search.
     embedding: Mapped[list | None] = mapped_column(Vector(EMBEDDING_DIM))
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Inventory / 86-ing. `is_86` is a temporary "sold out today" flag (distinct
+    # from `available`, the permanent enable switch). When `track_stock` is on,
+    # `stock_qty` decrements on confirm and auto-86s at zero.
+    track_stock: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    stock_qty: Mapped[int | None] = mapped_column(Integer)
+    is_86: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

@@ -7,6 +7,16 @@ from db.repositories.menu_repo import MenuRepo
 from services.embeddings import embed_text, embed_texts, embeddings_enabled
 
 
+def effective_available(item: MenuItem) -> bool:
+    """A dish is orderable only if it's enabled, not 86'd, and (if stock-tracked)
+    still in stock."""
+    if not item.available or item.is_86:
+        return False
+    if item.track_stock and (item.stock_qty or 0) <= 0:
+        return False
+    return True
+
+
 def menu_item_embedding_text(item: MenuItem) -> str:
     """Compose the text we embed for semantic search of a dish."""
     parts = [
@@ -27,13 +37,16 @@ class MenuService:
         self.repo = MenuRepo(db)
 
     def list_items(self, include_unavailable: bool = False) -> list[MenuItem]:
-        return self.repo.list_all(include_unavailable=include_unavailable)
+        items = self.repo.list_all(include_unavailable=include_unavailable)
+        if include_unavailable:
+            return items  # admin sees everything (incl. 86'd / out-of-stock)
+        return [i for i in items if effective_available(i)]
 
     def get_item(self, item_id: str, include_unavailable: bool = False) -> MenuItem:
         item = self.repo.get_by_id(item_id)
         if not item:
             raise ValueError(f"Menu item '{item_id}' not found")
-        if not include_unavailable and not item.available:
+        if not include_unavailable and not effective_available(item):
             raise ValueError(f"Menu item '{item_id}' not found")
         return item
 
@@ -43,8 +56,8 @@ class MenuService:
     def search(self, query: str) -> list[MenuItem]:
         """Hybrid search: keyword ranking blended with semantic similarity
         (pgvector). Falls back to keyword-only when embeddings are
-        unavailable."""
-        return self.repo.hybrid_search(query)
+        unavailable. Customer-facing → only orderable dishes."""
+        return [i for i in self.repo.hybrid_search(query) if effective_available(i)]
 
     def filter(
         self,
@@ -57,13 +70,14 @@ class MenuService:
     ) -> list[MenuItem]:
         """AND-filter items by any combination of category, dietary tags,
         spice level, max price, or keyword."""
-        return self.repo.filter_items(
+        items = self.repo.filter_items(
             category=category,
             dietary=dietary,
             spice_level=spice_level,
             max_price=max_price,
             keyword=keyword,
         )
+        return [i for i in items if effective_available(i)]
 
     def create_item(self, **kwargs) -> MenuItem:
         item = self.repo.create(**kwargs)

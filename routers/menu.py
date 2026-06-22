@@ -28,6 +28,9 @@ class MenuItemResponse(BaseModel):
     popularity_note: str | None
     image_url: str | None
     available: bool
+    track_stock: bool = False
+    stock_qty: int | None = None
+    is_86: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -48,6 +51,8 @@ class CreateMenuItemRequest(BaseModel):
     popularity_note: str | None = None
     image_url: str | None = None
     available: bool = True
+    track_stock: bool = False
+    stock_qty: int | None = None
 
 
 class UpdateMenuItemRequest(BaseModel):
@@ -65,6 +70,9 @@ class UpdateMenuItemRequest(BaseModel):
     popularity_note: str | None = None
     image_url: str | None = None
     available: bool | None = None
+    track_stock: bool | None = None
+    stock_qty: int | None = None
+    is_86: bool | None = None
 
 
 @router.get("", response_model=list[MenuItemResponse])

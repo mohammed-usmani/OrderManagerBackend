@@ -12,6 +12,7 @@ from db.repositories.order_repo import OrderRepo
 from services import order_lifecycle as lifecycle
 from services.billing import compute_bill
 from services.events import publish_order_event
+from services.menu_service import effective_available
 
 
 class OrderService:
@@ -167,8 +168,8 @@ class OrderService:
         menu_item = self.menu_repo.get_by_id(menu_item_id)
         if not menu_item:
             raise ValueError(f"Menu item '{menu_item_id}' not found")
-        if not menu_item.available:
-            raise ValueError(f"'{menu_item.name}' is currently unavailable")
+        if not effective_available(menu_item):
+            raise ValueError(f"Sorry, '{menu_item.name}' just ran out / is unavailable")
         return self.order_repo.add_item(
             order_id=order_id,
             menu_item_id=menu_item_id,
@@ -197,8 +198,8 @@ class OrderService:
         menu_item = self.menu_repo.get_by_id(menu_item_id)
         if not menu_item:
             raise ValueError(f"Menu item '{menu_item_id}' not found")
-        if not menu_item.available:
-            raise ValueError(f"'{menu_item.name}' is currently unavailable")
+        if not effective_available(menu_item):
+            raise ValueError(f"Sorry, '{menu_item.name}' just ran out / is unavailable")
         existing = self.order_repo.get_item_in_order(order_id, menu_item_id)
         if existing:
             existing.quantity = quantity
@@ -241,6 +242,14 @@ class OrderService:
         # surcharge can never leak onto a delivery bill.
         if (order.order_type or lifecycle.PARCEL) == lifecycle.PARCEL:
             order.is_ac = False
+
+        # Decrement tracked stock and auto-86 anything that hits zero.
+        for it in order.items:
+            mi = self.menu_repo.get_by_id(it.menu_item_id)
+            if mi and mi.track_stock and mi.stock_qty is not None:
+                mi.stock_qty = max(0, mi.stock_qty - it.quantity)
+                if mi.stock_qty <= 0:
+                    mi.is_86 = True
 
         # Freeze the bill snapshot (subtotal + charges + total) at confirm time.
         self._freeze_bill(order)
