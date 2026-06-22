@@ -89,6 +89,38 @@ def resolve_table(qr_token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+# --- Public guest endpoints (dine-in, by QR token) ---
+
+@router.get("/tab/{qr_token}")
+def guest_tab(qr_token: str, db: Session = Depends(get_db)):
+    """The guest's running tab for their table (open session detail) or none."""
+    from db.repositories.table_session_repo import TableSessionRepo
+    try:
+        info = TableService(db).resolve_qr(qr_token)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    sess = TableSessionRepo(db).get_open_for_table(info["table_id"])
+    if not sess:
+        return {"open": False, "table_label": info["label"]}
+    detail = TableService(db).session_detail(sess.id)
+    return {"open": True, "session_id": sess.id, **detail}
+
+
+@router.post("/call/{qr_token}")
+def guest_call_waiter(qr_token: str, db: Session = Depends(get_db)):
+    """Guest taps 'call waiter' — surfaces a service request on the floor/KDS."""
+    from services.events import publish_order_event
+    try:
+        info = TableService(db).resolve_qr(qr_token)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    publish_order_event(
+        "service_request", table_id=info["table_id"], table_label=info["label"],
+        zone_name=info.get("zone_name"),
+    )
+    return {"ok": True}
+
+
 # --- Admin: live floor map ---
 
 @router.get("/floor")
