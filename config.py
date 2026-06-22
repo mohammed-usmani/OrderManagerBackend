@@ -23,6 +23,12 @@ GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 DATABASE_URL = os.environ["DATABASE_URL"]
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
+# Razorpay (TEST mode for this project). Empty when unset → online payments are
+# disabled and the UI falls back to cash only.
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+
 # Semantic menu search (pgvector + Mistral embeddings). mistral-embed is
 # 1024-dimensional. Embeddings degrade gracefully — if the API key/model is
 # missing or a call fails, search falls back to keyword matching.

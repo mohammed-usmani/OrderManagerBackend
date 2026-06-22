@@ -30,6 +30,7 @@ from routers import (
     floors,
     menu,
     orders,
+    payments,
     service_areas,
     settings,
     staff,
@@ -112,6 +113,7 @@ app.include_router(table_sessions.router)
 app.include_router(settings.router)
 app.include_router(analytics.router)
 app.include_router(staff.router)
+app.include_router(payments.router)
 
 
 # --- Voice WebSocket endpoint ---

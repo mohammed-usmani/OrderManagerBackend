@@ -39,6 +39,8 @@ class MenuItem(Base):
     track_stock: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     stock_qty: Mapped[int | None] = mapped_column(Integer)
     is_86: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # HSN/SAC code for GST tax invoices (optional).
+    hsn_code: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

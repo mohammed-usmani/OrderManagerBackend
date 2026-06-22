@@ -93,6 +93,12 @@ class Order(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
 
+    # Payment extras captured at settle time (on top of the frozen item bill).
+    tip_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0, server_default="0", nullable=False)
+    discount_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0, server_default="0", nullable=False)
+    discount_reason: Mapped[str | None] = mapped_column(Text)
+    payment_method: Mapped[str | None] = mapped_column(String)  # cash | upi | card | razorpay
+
     # Cancellation / refund audit fields. A refund is tracked as a flag on the
     # paid order (PAID stays terminal) rather than a new lifecycle state.
     cancellation_reason: Mapped[str | None] = mapped_column(Text)

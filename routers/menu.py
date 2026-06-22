@@ -31,6 +31,7 @@ class MenuItemResponse(BaseModel):
     track_stock: bool = False
     stock_qty: int | None = None
     is_86: bool = False
+    hsn_code: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -53,6 +54,7 @@ class CreateMenuItemRequest(BaseModel):
     available: bool = True
     track_stock: bool = False
     stock_qty: int | None = None
+    hsn_code: str | None = None
 
 
 class UpdateMenuItemRequest(BaseModel):
@@ -73,6 +75,7 @@ class UpdateMenuItemRequest(BaseModel):
     track_stock: bool | None = None
     stock_qty: int | None = None
     is_86: bool | None = None
+    hsn_code: str | None = None
 
 
 @router.get("", response_model=list[MenuItemResponse])

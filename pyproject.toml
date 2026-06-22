@@ -21,6 +21,7 @@ dependencies = [
     "redis",
     "httpx",
     "bcrypt<4.0.0",
+    "razorpay>=2.0.1",
 ]
 
 [tool.uv]

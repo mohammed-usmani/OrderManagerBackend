@@ -54,7 +54,16 @@ def compute_bill(
         if c.get("ac_only") and not is_ac:
             continue
         amount = to_money(sub * Decimal(str(c["rate"])))  # round each charge to paise
-        charges.append({"label": c["label"], "rate": c["rate"], "amount": float(amount)})
+        # Indian GST is invoiced as CGST + SGST (each half the rate). Split it
+        # at the data level so receipts/exports are tax-compliant.
+        if c.get("key") == "gst" or str(c.get("label", "")).upper().startswith("GST"):
+            half_rate = c["rate"] / 2
+            cgst = to_money(amount / 2)
+            sgst = amount - cgst  # keep the pair summing exactly to the GST amount
+            charges.append({"label": f"CGST ({half_rate * 100:g}%)", "rate": half_rate, "amount": float(cgst)})
+            charges.append({"label": f"SGST ({half_rate * 100:g}%)", "rate": half_rate, "amount": float(sgst)})
+        else:
+            charges.append({"label": c["label"], "rate": c["rate"], "amount": float(amount)})
         running += amount
     return {
         "subtotal": float(sub),
