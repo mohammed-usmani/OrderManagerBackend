@@ -33,6 +33,7 @@ class BillCharge(BaseModel):
 class OrderResponse(BaseModel):
     id: str
     status: str
+    order_type: str
     created_at: datetime
     confirmed_at: datetime | None
     paid_at: datetime | None
@@ -51,6 +52,7 @@ def _serialize(order) -> OrderResponse:
     return OrderResponse(
         id=order.id,
         status=order.status,
+        order_type=order.order_type or "parcel",
         created_at=order.created_at,
         confirmed_at=order.confirmed_at,
         paid_at=order.paid_at,

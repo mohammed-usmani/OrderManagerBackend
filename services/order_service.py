@@ -234,6 +234,11 @@ class OrderService:
         order.status = "confirmed"
         order.confirmed_at = datetime.utcnow()
 
+        # Parcel orders are never in an AC zone — guard so the dine-in AC
+        # surcharge can never leak onto a delivery bill.
+        if (order.order_type or lifecycle.PARCEL) == lifecycle.PARCEL:
+            order.is_ac = False
+
         # Freeze the bill snapshot (subtotal + charges + total) at confirm time.
         self._freeze_bill(order)
 
@@ -294,10 +299,21 @@ class OrderService:
         from db.repositories.table_repo import TableRepo
         from db.repositories.table_session_repo import TableSessionRepo
 
-        open_others = [
+        siblings = [
             o
             for o in self.order_repo.list_for_table_session(order.table_session_id)
-            if o.id != order.id and o.status not in lifecycle.CLOSED_STATUSES
+            if o.id != order.id
+        ]
+        # Drop abandoned EMPTY carts (un-fired rounds with no items) so a guest
+        # who scanned + opened a round but never ordered can't keep the table
+        # "occupied" forever once the real round is paid. A cart WITH items is a
+        # round still being built, so it legitimately keeps the table open.
+        for o in siblings:
+            if o.status == lifecycle.CART and not o.items:
+                o.status = lifecycle.CANCELLED
+                self._close_chat(o.id)
+        open_others = [
+            o for o in siblings if o.status not in lifecycle.CLOSED_STATUSES
         ]
         if open_others:
             return
