@@ -93,6 +93,13 @@ class Order(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
 
+    # Cancellation / refund audit fields. A refund is tracked as a flag on the
+    # paid order (PAID stays terminal) rather than a new lifecycle state.
+    cancellation_reason: Mapped[str | None] = mapped_column(Text)
+    refunded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    refund_reason: Mapped[str | None] = mapped_column(Text)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime)
+
     items: Mapped[list["OrderItem"]] = relationship(
         "OrderItem", back_populates="order", cascade="all, delete-orphan"
     )
@@ -113,6 +120,11 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     price_at_order: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     special_instructions: Mapped[str | None] = mapped_column(Text)
+    # Per-item fulfilment state for partial service + the KDS item-bump.
+    status: Mapped[str] = mapped_column(
+        String, default="pending", server_default="pending", nullable=False
+    )  # pending | ready | served | voided
+    void_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

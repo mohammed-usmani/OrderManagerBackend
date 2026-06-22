@@ -24,10 +24,12 @@ from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
 from services.auth_service import auth_service
 from services.events import subscribe_order_events
-from services.roles import STAFF_ROLES
+from services.roles import CASHIER_ROLES, STAFF_ROLES
 
 # KDS (view orders + advance status) is open to any on-shift staff member.
 _require_staff = require_roles(STAFF_ROLES)
+# Edits / voids / refunds are restricted to cashiers and managers.
+_require_cashier = require_roles(CASHIER_ROLES)
 from services.menu_service import MenuService
 from services.order_service import OrderService
 
@@ -46,6 +48,8 @@ class AdminOrderItem(BaseModel):
     price_at_order: float
     line_total: float
     special_instructions: str | None
+    status: str = "pending"
+    void_reason: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -87,10 +91,36 @@ class AdminOrderResponse(BaseModel):
     charges: list[AdminBillCharge]
     total: float
     items: list[AdminOrderItem]
+    refunded: bool = False
+    cancellation_reason: str | None = None
 
 
 class UpdateStatusRequest(BaseModel):
     status: str  # any legal lifecycle target (validated by the state machine)
+
+
+class CancelOrderRequest(BaseModel):
+    reason: str | None = None
+
+
+class EditItemRequest(BaseModel):
+    menu_item_id: str
+    quantity: int
+    special_instructions: str = ""
+
+
+class VoidItemRequest(BaseModel):
+    order_item_id: str
+    reason: str
+
+
+class ItemStatusRequest(BaseModel):
+    order_item_id: str
+    status: str  # pending | ready | served
+
+
+class RefundRequest(BaseModel):
+    reason: str
 
 
 # --- Helpers ---
@@ -120,6 +150,8 @@ def _serialize_order(order, db) -> AdminOrderResponse:
                 price_at_order=price,
                 line_total=price * oi.quantity,
                 special_instructions=oi.special_instructions,
+                status=oi.status,
+                void_reason=oi.void_reason,
             )
         )
     # Context-aware bill, preferring the snapshot frozen at confirm time.
@@ -164,6 +196,8 @@ def _serialize_order(order, db) -> AdminOrderResponse:
         charges=[AdminBillCharge(**c) for c in bill["charges"]],
         total=bill["total"],
         items=items,
+        refunded=bool(order.refunded),
+        cancellation_reason=order.cancellation_reason,
     )
 
 
@@ -248,6 +282,60 @@ def update_order_status(
 
     order = service.get_order_admin(order_id)
     return _serialize_order(order, db)
+
+
+def _order_op(db, fn):
+    """Run an order-service mutation, commit, and return the serialized order."""
+    try:
+        order = fn()
+        db.commit()
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return _serialize_order(order, db)
+
+
+@router.post("/orders/{order_id}/cancel", response_model=AdminOrderResponse)
+def cancel_order_admin(
+    order_id: str, req: CancelOrderRequest,
+    db: Session = Depends(get_db), actor=Depends(_require_staff),
+):
+    return _order_op(db, lambda: OrderService(db).cancel_order(order_id, req.reason, actor))
+
+
+@router.patch("/orders/{order_id}/items", response_model=AdminOrderResponse)
+def edit_order_item(
+    order_id: str, req: EditItemRequest,
+    db: Session = Depends(get_db), actor=Depends(_require_cashier),
+):
+    return _order_op(db, lambda: OrderService(db).edit_item_admin(
+        order_id, req.menu_item_id, req.quantity, req.special_instructions, actor))
+
+
+@router.post("/orders/{order_id}/void-item", response_model=AdminOrderResponse)
+def void_order_item(
+    order_id: str, req: VoidItemRequest,
+    db: Session = Depends(get_db), actor=Depends(_require_cashier),
+):
+    return _order_op(db, lambda: OrderService(db).void_item(
+        order_id, req.order_item_id, req.reason, actor))
+
+
+@router.patch("/orders/{order_id}/item-status", response_model=AdminOrderResponse)
+def set_order_item_status(
+    order_id: str, req: ItemStatusRequest,
+    db: Session = Depends(get_db), _=Depends(_require_staff),
+):
+    return _order_op(db, lambda: OrderService(db).set_item_status(
+        order_id, req.order_item_id, req.status.strip().lower()))
+
+
+@router.post("/orders/{order_id}/refund", response_model=AdminOrderResponse)
+def refund_order_admin(
+    order_id: str, req: RefundRequest,
+    db: Session = Depends(get_db), actor=Depends(_require_cashier),
+):
+    return _order_op(db, lambda: OrderService(db).refund_order(order_id, req.reason, actor))
 
 
 # --- Analytics ---

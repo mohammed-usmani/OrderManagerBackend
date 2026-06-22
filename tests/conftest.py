@@ -23,6 +23,7 @@ def setup_test_db():
     import db.models.dining_zone  # noqa: F401
     import db.models.restaurant_table  # noqa: F401
     import db.models.table_session  # noqa: F401
+    import db.models.audit_log  # noqa: F401
 
     test_engine = create_engine(TEST_DATABASE_URL)
     try:

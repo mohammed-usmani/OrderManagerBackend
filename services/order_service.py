@@ -10,6 +10,7 @@ from db.repositories.chat_repo import ChatRepo
 from db.repositories.menu_repo import MenuRepo
 from db.repositories.order_repo import OrderRepo
 from services import order_lifecycle as lifecycle
+from services.audit_service import write_audit
 from services.billing import compute_bill
 from services.events import publish_order_event
 from services.menu_service import effective_available
@@ -218,7 +219,11 @@ class OrderService:
 
         from services.money import money_float
         subtotal = money_float(
-            sum((Decimal(str(i.price_at_order)) * i.quantity for i in order.items), Decimal(0))
+            sum(
+                (Decimal(str(i.price_at_order)) * i.quantity
+                 for i in order.items if i.status != "voided"),
+                Decimal(0),
+            )
         )
         bill = compute_bill(
             subtotal,
@@ -346,18 +351,175 @@ class OrderService:
     def get_orders_for_customer(self, customer_id: str) -> list[Order]:
         return self.order_repo.get_all_for_customer(customer_id)
 
-    def cancel_order(self, order_id: str) -> Order:
+    def cancel_order(self, order_id: str, reason: str | None = None, actor=None) -> Order:
         order = self.order_repo.get_by_id(order_id)
         if not order:
             raise ValueError("Order not found")
-        if order.status not in ("cart", "confirmed"):
+        if order.status not in ("cart", "confirmed", "cooking"):
             raise ValueError(f"Cannot cancel order with status '{order.status}'")
         order.status = "cancelled"
+        if reason:
+            order.cancellation_reason = reason
         self.db.flush()
         self._close_chat(order_id)
         self._release_table_if_done(order)  # dine-in: free the table on cancel
+        write_audit(self.db, actor=actor, action="order.cancel", entity="order",
+                    entity_id=order.id, reason=reason)
         publish_order_event("status", order_id=order.id, status="cancelled")
         return order
+
+    # --- Order editing / void / refund / per-item status (admin) ---
+
+    _EDITABLE_STATUSES = {"cart", "confirmed", "cooking"}
+
+    def _assert_editable(self, order: Order) -> None:
+        if order.status not in self._EDITABLE_STATUSES:
+            raise ValueError(
+                f"Can't edit a '{order.status}' order — it's already served/paid/closed."
+            )
+
+    def edit_item_admin(
+        self, order_id: str, menu_item_id: str, quantity: int,
+        special_instructions: str = "", actor=None,
+    ) -> Order:
+        """Add or set an item's quantity on an in-progress order, then re-freeze
+        the bill. quantity<=0 removes the line."""
+        order = self.order_repo.get_by_id(order_id)
+        if not order:
+            raise ValueError("Order not found")
+        self._assert_editable(order)
+        if quantity <= 0:
+            self.order_repo.remove_item(order_id, menu_item_id)
+        else:
+            menu_item = self.menu_repo.get_by_id(menu_item_id)
+            if not menu_item:
+                raise ValueError(f"Menu item '{menu_item_id}' not found")
+            existing = self.order_repo.get_item_in_order(order_id, menu_item_id)
+            if existing:
+                existing.quantity = quantity
+                if special_instructions:
+                    existing.special_instructions = special_instructions
+            else:
+                self.order_repo.add_item(
+                    order_id=order_id, menu_item_id=menu_item_id, quantity=quantity,
+                    price_at_order=float(menu_item.price),
+                    special_instructions=special_instructions,
+                )
+        self.db.flush()
+        self.db.refresh(order)
+        if order.status != "cart":
+            self._freeze_bill(order)
+        write_audit(self.db, actor=actor, action="order.edit_item", entity="order",
+                    entity_id=order.id, meta={"menu_item_id": menu_item_id, "quantity": quantity})
+        self.db.flush()
+        publish_order_event("edited", order_id=order.id, status=order.status)
+        return order
+
+    def void_item(self, order_id: str, order_item_id: str, reason: str, actor=None) -> Order:
+        """Void a single line (kitchen can't make it / customer changed mind),
+        keeping it on the ticket for the record but off the bill."""
+        order = self.order_repo.get_by_id(order_id)
+        if not order:
+            raise ValueError("Order not found")
+        item = next((i for i in order.items if i.id == order_item_id), None)
+        if not item:
+            raise ValueError("Line item not found on this order")
+        item.status = "voided"
+        item.void_reason = reason
+        self.db.flush()
+        if order.status not in ("cart",):
+            self._freeze_bill(order)
+        write_audit(self.db, actor=actor, action="order.void_item", entity="order_item",
+                    entity_id=order_item_id, reason=reason, meta={"order_id": order_id})
+        self.db.flush()
+        publish_order_event("edited", order_id=order.id, status=order.status)
+        return order
+
+    def set_item_status(self, order_id: str, order_item_id: str, status: str) -> Order:
+        if status not in ("pending", "ready", "served"):
+            raise ValueError(f"Invalid item status '{status}'")
+        order = self.order_repo.get_by_id(order_id)
+        if not order:
+            raise ValueError("Order not found")
+        item = next((i for i in order.items if i.id == order_item_id), None)
+        if not item:
+            raise ValueError("Line item not found on this order")
+        if item.status == "voided":
+            raise ValueError("Can't change a voided item")
+        item.status = status
+        self.db.flush()
+        publish_order_event("edited", order_id=order.id, status=order.status)
+        return order
+
+    def refund_order(self, order_id: str, reason: str, actor=None) -> Order:
+        order = self.order_repo.get_by_id(order_id)
+        if not order:
+            raise ValueError("Order not found")
+        if order.status != "paid":
+            raise ValueError("Only a paid order can be refunded")
+        if order.refunded:
+            raise ValueError("Order is already refunded")
+        order.refunded = True
+        order.refund_reason = reason
+        order.refunded_at = datetime.utcnow()
+        self.db.flush()
+        write_audit(self.db, actor=actor, action="order.refund", entity="order",
+                    entity_id=order.id, reason=reason, meta={"total": float(order.total or 0)})
+        self.db.flush()
+        publish_order_event("refunded", order_id=order.id, status=order.status)
+        return order
+
+    def transfer_session(self, table_session_id: str, to_table_id: str, actor=None) -> None:
+        """Move an open table session (all its orders) to a different table."""
+        from db.repositories.table_repo import TableRepo
+        from db.repositories.table_session_repo import TableSessionRepo
+        ts_repo = TableSessionRepo(self.db)
+        t_repo = TableRepo(self.db)
+        sess = ts_repo.get_by_id(table_session_id)
+        if not sess:
+            raise ValueError("Table session not found")
+        dest = t_repo.get_by_id(to_table_id)
+        if not dest:
+            raise ValueError("Destination table not found")
+        if ts_repo.get_open_for_table(to_table_id):
+            raise ValueError("Destination table already has an open tab")
+        old_table_id = sess.table_id
+        sess.table_id = to_table_id
+        for o in self.order_repo.list_for_table_session(table_session_id):
+            o.table_id = to_table_id
+        t_repo.update(to_table_id, status="occupied")
+        if old_table_id:
+            t_repo.update(old_table_id, status="free")
+        self.db.flush()
+        write_audit(self.db, actor=actor, action="table.transfer", entity="table_session",
+                    entity_id=table_session_id, meta={"from": old_table_id, "to": to_table_id})
+        self.db.flush()
+        publish_order_event("transfer", table_session_id=table_session_id)
+
+    def merge_sessions(self, from_session_id: str, into_session_id: str, actor=None) -> None:
+        """Merge one open tab into another (combine checks); close + free the source."""
+        from db.repositories.table_repo import TableRepo
+        from db.repositories.table_session_repo import TableSessionRepo
+        ts_repo = TableSessionRepo(self.db)
+        t_repo = TableRepo(self.db)
+        src = ts_repo.get_by_id(from_session_id)
+        dst = ts_repo.get_by_id(into_session_id)
+        if not src or not dst:
+            raise ValueError("Table session not found")
+        if src.id == dst.id:
+            raise ValueError("Can't merge a tab into itself")
+        for o in self.order_repo.list_for_table_session(from_session_id):
+            o.table_session_id = into_session_id
+            o.table_id = dst.table_id
+        src.status = "closed"
+        src.closed_at = datetime.utcnow()
+        if src.table_id:
+            t_repo.update(src.table_id, status="free")
+        self.db.flush()
+        write_audit(self.db, actor=actor, action="table.merge", entity="table_session",
+                    entity_id=into_session_id, meta={"from": from_session_id})
+        self.db.flush()
+        publish_order_event("merge", table_session_id=into_session_id)
 
     def mark_awaiting_payment(self, order_id: str) -> Order:
         order = self.order_repo.get_by_id(order_id)

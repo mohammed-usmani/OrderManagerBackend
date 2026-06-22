@@ -70,7 +70,8 @@ def bill_for_order(order) -> dict:
     time so historical bills never drift when the charge policy changes; falls
     back to a live computation from the order's context for carts/legacy rows.
     """
-    items = list(order.items)
+    # Voided line items don't count toward the bill.
+    items = [i for i in order.items if getattr(i, "status", None) != "voided"]
     subtotal = money_float(
         sum((to_money(i.price_at_order) * i.quantity for i in items), Decimal(0))
     )

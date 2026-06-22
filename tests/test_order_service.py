@@ -86,6 +86,39 @@ def test_cancel_order_closes_session(db):
     assert session.status == "closed"
 
 
+def test_void_item_excludes_from_bill(db):
+    user = _make_user(db)
+    _make_menu_item(db, "OS07")
+    _make_menu_item(db, "OS08")
+    service = OrderService(db)
+    cart = service.get_or_create_cart(user.id)
+    service.add_item(cart.id, "OS07", quantity=1)  # 300
+    service.add_item(cart.id, "OS08", quantity=1)  # 300
+    service.confirm_order(cart.id)
+    before = float(cart.total)
+    # Void one of the two lines.
+    item = next(i for i in cart.items if i.menu_item_id == "OS08")
+    service.void_item(cart.id, item.id, reason="kitchen ran out")
+    assert item.status == "voided"
+    assert float(cart.total) < before  # bill re-frozen without the voided line
+
+
+def test_refund_only_paid(db):
+    user = _make_user(db)
+    _make_menu_item(db, "OS09")
+    service = OrderService(db)
+    cart = service.get_or_create_cart(user.id)
+    service.add_item(cart.id, "OS09", quantity=1)
+    service.confirm_order(cart.id)
+    with pytest.raises(ValueError, match="paid order"):
+        service.refund_order(cart.id, reason="x")
+    # March to paid, then refund.
+    for s in ("cooking", "ready", "delivered", "paid"):
+        service.advance_status(cart.id, s)
+    refunded = service.refund_order(cart.id, reason="customer complaint")
+    assert refunded.refunded is True and refunded.refund_reason == "customer complaint"
+
+
 def test_payment_failure_keeps_session_active(db):
     user = _make_user(db)
     menu_item = _make_menu_item(db, "OS06")
