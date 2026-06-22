@@ -1072,9 +1072,21 @@ def create_pipeline(
         except ValueError:
             logger.warning("Dine-in table_token didn't resolve — agent will ask for the table")
 
+    # Load the editable restaurant profile so "are we open" tracks admin hours.
+    _profile_hours, _profile_tz = None, None
+    try:
+        with get_session() as db:
+            from services.settings_service import SettingsService
+            _profile = SettingsService(db).get_restaurant_profile()
+            _profile_hours, _profile_tz = _profile.get("hours"), _profile.get("timezone")
+    except Exception:
+        pass  # fall back to the legacy hardcoded schedule
+
     # Fresh per-connection time context prepended to the mode-appropriate prompt.
     system_instruction = (
-        build_time_context_message(user_timezone) + "\n\n" + build_system_prompt(session)
+        build_time_context_message(user_timezone, hours=_profile_hours, timezone=_profile_tz)
+        + "\n\n"
+        + build_system_prompt(session)
     )
 
     # Collect tool schemas up front. Pass tools at init time ONLY — if we also

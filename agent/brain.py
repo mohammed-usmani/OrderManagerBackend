@@ -6,18 +6,46 @@ from zoneinfo import ZoneInfo
 RESTAURANT_TZ = ZoneInfo("Asia/Kolkata")
 
 
-def _service_period_for(dt: datetime) -> str:
-    # Closed Mondays (weekday 0). Lunch 11-15, dinner 18-23 IST.
-    if dt.weekday() == 0:
-        return "CLOSED today (we're closed on Mondays) — reopens Tuesday 11 AM"
-    hour = dt.hour
-    if 11 <= hour < 15:
-        return "lunch service"
-    if 15 <= hour < 18:
-        return "afternoon (kitchen reopens at 6 PM for dinner)"
-    if 18 <= hour < 23:
-        return "dinner service"
-    return "closed hours (we open at 11 AM, Tuesday-Sunday)"
+_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _service_period_for(dt: datetime, hours: dict | None = None) -> str:
+    """Describe the current service period.
+
+    When ``hours`` (the configurable per-weekday windows from the restaurant
+    profile) is supplied, it is authoritative; otherwise we fall back to the
+    legacy hardcoded Saffron & Smoke schedule.
+    """
+    if not hours:
+        # Legacy default: closed Mondays, lunch 11-15, dinner 18-23 IST.
+        if dt.weekday() == 0:
+            return "CLOSED today (we're closed on Mondays) — reopens Tuesday 11 AM"
+        hour = dt.hour
+        if 11 <= hour < 15:
+            return "lunch service"
+        if 15 <= hour < 18:
+            return "afternoon (kitchen reopens at 6 PM for dinner)"
+        if 18 <= hour < 23:
+            return "dinner service"
+        return "closed hours (we open at 11 AM, Tuesday-Sunday)"
+
+    today = _WEEKDAYS[dt.weekday()]
+    windows = hours.get(today) or []
+    now = dt.strftime("%H:%M")
+    if not windows:
+        for i in range(1, 8):
+            nd = _WEEKDAYS[(dt.weekday() + i) % 7]
+            w = hours.get(nd) or []
+            if w:
+                return f"CLOSED today — reopens {nd.capitalize()} {w[0]['open']}"
+        return "CLOSED"
+    for w in windows:
+        if w["open"] <= now < w["close"]:
+            return f"open now — service until {w['close']}"
+    upcoming = [w for w in windows if now < w["open"]]
+    if upcoming:
+        return f"closed right now — opens at {upcoming[0]['open']}"
+    return "closed for the evening — reopens tomorrow"
 
 
 def _safe_zone(name: str | None) -> ZoneInfo | None:
@@ -29,19 +57,24 @@ def _safe_zone(name: str | None) -> ZoneInfo | None:
         return None
 
 
-def build_time_context_message(user_timezone: str | None = None) -> str:
+def build_time_context_message(
+    user_timezone: str | None = None,
+    hours: dict | None = None,
+    timezone: str | None = None,
+) -> str:
     """Build a fresh time-context block to prepend as a SystemMessage.
 
     Called per-request so the agent always sees the real current time in both
-    the restaurant's timezone (IST) and the customer's local timezone. This
-    lets the LLM reason unambiguously about "are you open right now" without
-    getting confused by the server's clock or a stale import-time snapshot.
+    the restaurant's timezone and the customer's local timezone. ``hours`` and
+    ``timezone`` come from the editable restaurant profile (fallback: IST +
+    legacy schedule) so "are you open right now" tracks the admin's settings.
     """
-    now_restaurant = datetime.now(RESTAURANT_TZ)
+    restaurant_zone = _safe_zone(timezone) or RESTAURANT_TZ
+    now_restaurant = datetime.now(restaurant_zone)
     user_zone = _safe_zone(user_timezone)
 
     restaurant_time_line = now_restaurant.strftime("%A, %B %d, %Y at %I:%M %p %Z")
-    service_period = _service_period_for(now_restaurant)
+    service_period = _service_period_for(now_restaurant, hours)
 
     if user_zone:
         now_user = now_restaurant.astimezone(user_zone)
