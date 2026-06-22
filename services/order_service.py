@@ -11,6 +11,7 @@ from db.repositories.menu_repo import MenuRepo
 from db.repositories.order_repo import OrderRepo
 from services import order_lifecycle as lifecycle
 from services.billing import compute_bill
+from services.events import publish_order_event
 
 
 class OrderService:
@@ -125,6 +126,7 @@ class OrderService:
         if sess.table_id:
             TableRepo(self.db).update(sess.table_id, status="free")
         self.db.flush()
+        publish_order_event("settled", table_session_id=table_session_id)
         return settled
 
     def request_bill(self, table_session_id: str) -> None:
@@ -141,6 +143,7 @@ class OrderService:
         if sess.table_id:
             TableRepo(self.db).update(sess.table_id, status="needs_bill")
         self.db.flush()
+        publish_order_event("bill_requested", table_session_id=table_session_id)
 
     def _assert_mutable(self, order_id: str) -> None:
         """Items may only be changed while the order is still a cart."""
@@ -254,6 +257,7 @@ class OrderService:
             customer.last_order_at = order.confirmed_at
 
         self.db.flush()
+        publish_order_event("confirmed", order_id=order.id, status=order.status)
         return order
 
     def advance_status(self, order_id: str, to_status: str) -> Order:
@@ -281,6 +285,7 @@ class OrderService:
             self._release_table_if_done(order)
 
         self.db.flush()
+        publish_order_event("status", order_id=order.id, status=to_status)
         return order
 
     def _close_chat(self, order_id: str) -> None:
@@ -342,6 +347,7 @@ class OrderService:
         self.db.flush()
         self._close_chat(order_id)
         self._release_table_if_done(order)  # dine-in: free the table on cancel
+        publish_order_event("status", order_id=order.id, status="cancelled")
         return order
 
     def mark_awaiting_payment(self, order_id: str) -> Order:

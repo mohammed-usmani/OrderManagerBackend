@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,8 @@ from dependencies import require_admin, require_roles
 from routers.menu import MenuItemResponse
 from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
+from services.auth_service import auth_service
+from services.events import subscribe_order_events
 from services.roles import STAFF_ROLES
 
 # KDS (view orders + advance status) is open to any on-shift staff member.
@@ -165,6 +168,36 @@ def _serialize_order(order, db) -> AdminOrderResponse:
 
 
 # --- Endpoints ---
+
+@router.get("/orders/stream")
+async def stream_orders(token: str = Query(..., description="JWT (EventSource can't send headers)")):
+    """Server-sent stream of order-board change events for the live KDS.
+
+    Auth is via the ``token`` query param because the browser's EventSource API
+    cannot set an Authorization header. Any on-shift staff role may subscribe.
+    """
+    try:
+        payload = auth_service.decode_token(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="Staff access required")
+
+    async def gen():
+        yield "retry: 3000\n\n"  # client reconnect backoff
+        async for data in subscribe_order_events():
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering
+        },
+    )
+
 
 @router.get("/orders", response_model=list[AdminOrderResponse])
 def list_orders(
