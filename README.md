@@ -144,6 +144,7 @@ On startup the server seeds the menu (only into an empty table; afterwards it ju
 | `SEED_ON_STARTUP` | · | `true`; seeds only empty tables. Set `false` once a deployment is set up |
 | `MAX_CONCURRENT_CALLS` | · | `3` (Gemini free tier allows about 3 live sessions) |
 | `MAX_SESSION_SECONDS` | · | `900` |
+| `VOICE_IDLE_SECONDS` | · | `90`; a call where nobody speaks for this long is ended (with a notice) |
 | `MISTRAL_API_KEY` | · | semantic menu search; keyword search without it |
 | `MISTRAL_EMBED_MODEL` · `EMBEDDING_DIM` | · | `mistral-embed` · `1024` |
 | `RAZORPAY_KEY_ID` · `RAZORPAY_KEY_SECRET` · `RAZORPAY_WEBHOOK_SECRET` | · | cash-only when unset |
@@ -173,7 +174,7 @@ Full OpenAPI docs at `http://localhost:8000/docs`. Access levels: **public**, **
 | `/staff` | staff accounts and roles | owner/manager |
 | `/settings` | restaurant profile (public read) · charge policy | public · admin |
 | `/payments` | quote, Razorpay order/verify/webhook · cash | public · cashier |
-| `/health` | liveness | public |
+| `/health` · `/ready` | liveness · readiness (Postgres + Redis, 503 if either is down) | public |
 
 ---
 
@@ -230,7 +231,7 @@ Override with `TEST_DATABASE_URL` / `TEST_REDIS_URL` (the tests use Redis index 
 
 ## Deployment
 
-The backend runs on **Google Cloud Run** and the frontend on **Vercel** — see [`DEPLOY.md`](DEPLOY.md) for the step-by-step guide and `deploy.sh` for the deploy command. The container runs `alembic upgrade head` on boot, then starts the app.
+The backend ships as a Docker image that runs as an unprivileged user and listens on `$PORT`; the frontend is on **Vercel** at `order-manager.mohammedusmani.me`, with the API at `backend-saffron.mohammedusmani.me` (same site, so the session cookie works). The container runs `alembic upgrade head` on boot — several instances can boot at once, since migrations take a Postgres advisory lock — then starts the app. Point the host's health check at `/ready`. [`DEPLOY.md`](DEPLOY.md) still describes the earlier Cloud Run setup.
 
 ---
 

@@ -43,6 +43,9 @@ MAX_SESSION_SECONDS = int(os.environ.get("MAX_SESSION_SECONDS", "900"))
 # and the client auto-retries until a slot frees up (a simple queue). A returning
 # user gets straight in whenever a slot is free — no per-user blocking.
 MAX_CONCURRENT_CALLS = int(os.environ.get("MAX_CONCURRENT_CALLS", "3"))
+# End a call when nobody has spoken for this long, so abandoned calls don't
+# hold one of the few voice lines (Pipecat's own default is 5 minutes).
+VOICE_IDLE_SECONDS = int(os.environ.get("VOICE_IDLE_SECONDS", "90"))
 
 JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 

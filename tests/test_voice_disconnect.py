@@ -49,3 +49,16 @@ def test_client_disconnect_cancels_the_pipeline_task():
     # runner.run() return and the concurrency slot be released right away.
     asyncio.run(handlers["on_client_disconnected"](transport, object()))
     task.cancel.assert_awaited_once()
+
+
+def test_silent_calls_end_after_the_idle_limit():
+    """A caller who connects and never speaks shouldn't hold one of the few
+    voice lines for Pipecat's default five minutes."""
+    from pipecat.pipeline.pipeline import Pipeline
+
+    import main
+    from config import VOICE_IDLE_SECONDS
+
+    task = main.build_task(Pipeline([]))
+    assert task._idle_timeout_secs == VOICE_IDLE_SECONDS <= 120
+    assert "on_idle_timeout" in task._event_handlers

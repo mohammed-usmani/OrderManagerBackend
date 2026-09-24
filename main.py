@@ -30,6 +30,7 @@ from config import (
     MAX_SESSION_SECONDS,
     REDIS_URL,
     SEED_ON_STARTUP,
+    VOICE_IDLE_SECONDS,
 )
 from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline, load_call_context
@@ -215,6 +216,35 @@ def _cancel_pipeline_on_disconnect(transport, task, ip: str) -> None:
         await task.cancel()
 
 
+def build_task(pipeline) -> PipelineTask:
+    """A call's pipeline task, ended (with a notice to the client) once nobody
+    has spoken for VOICE_IDLE_SECONDS."""
+    task = PipelineTask(
+        pipeline, idle_timeout_secs=VOICE_IDLE_SECONDS, cancel_on_idle_timeout=False
+    )
+
+    @task.event_handler("on_idle_timeout")
+    async def _end_idle_call(task_):
+        try:
+            await task_.queue_frames([
+                OutputTransportMessageUrgentFrame(message={
+                    "kind": "ui_event",
+                    "event": "session_end",
+                    "data": {
+                        "reason": "idle",
+                        "message": "We didn't hear anything for a while, so we ended the call. "
+                                   "Tap the mic to start again.",
+                    },
+                })
+            ])
+            await asyncio.sleep(0.6)  # let the notice reach the client first
+        except Exception:
+            pass
+        await task_.cancel()
+
+    return task
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """Voice chat: ticket auth, then audio + UI events over WS via Pipecat."""
@@ -276,7 +306,7 @@ async def websocket_endpoint(websocket: WebSocket):
             websocket, user_timezone=user_timezone, table_token=table_token,
             call_context=call_context,
         )
-        task = PipelineTask(pipeline)
+        task = build_task(pipeline)
 
         # Hang-up → cancel the pipeline now so the slot is released immediately
         # (otherwise it leaks until the session cap; see helper docstring).
