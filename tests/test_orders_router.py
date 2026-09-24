@@ -23,7 +23,7 @@ def client(db):
 def auth_headers(client):
     client.post("/auth/register", json={"email": "ord@test.com", "password": "password1", "name": "Ord"})
     resp = client.post("/auth/login", json={"email": "ord@test.com", "password": "password1"})
-    token = resp.json()["access_token"]
+    token = client.cookies.get("saffron_session")
     return {"Authorization": f"Bearer {token}"}
 
 

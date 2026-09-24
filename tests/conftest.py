@@ -14,6 +14,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6380/15")
 # Tests seed what they need inside their own rolled-back transaction.
 os.environ["SEED_ON_STARTUP"] = "false"
+# TestClient talks plain http to "testserver", so the session cookie can't be Secure.
+os.environ["AUTH_COOKIE_SECURE"] = "false"
+os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 
 # Set True once the schema is created. DB-backed tests skip when it's False
 # (e.g. the pgvector extension can't be enabled without a superuser locally).
@@ -41,9 +44,10 @@ def setup_test_db():
         yield
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def _fresh_test_redis():
-    """Clear the tests' own Redis index so lockouts/tickets don't carry over runs."""
+    """Clear the tests' own Redis index so rate limits, lockouts and tickets
+    don't carry over between tests or runs."""
     import redis
 
     try:

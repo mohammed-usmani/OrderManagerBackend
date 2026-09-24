@@ -12,14 +12,24 @@ import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, WebSocket
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, OutputTransportMessageUrgentFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 
-from config import ADMIN_EMAIL, ADMIN_PASSWORD, MAX_SESSION_SECONDS, SEED_ON_STARTUP
+from config import (
+    ADMIN_EMAIL,
+    ADMIN_PASSWORD,
+    AUTH_COOKIE_NAME,
+    CORS_ORIGINS,
+    MAX_SESSION_SECONDS,
+    SEED_ON_STARTUP,
+)
 from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline
 from routers import (
@@ -92,10 +102,40 @@ app = FastAPI(title="Culinary Oracle API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,  # the browser sends the session cookie
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _request_origin(request: Request) -> str | None:
+    origin = request.headers.get("origin")
+    if origin:
+        return origin.rstrip("/")
+    referer = urlsplit(request.headers.get("referer", ""))
+    return f"{referer.scheme}://{referer.netloc}" if referer.netloc else None
+
+
+@app.middleware("http")
+async def reject_cross_site_cookie_writes(request: Request, call_next):
+    """CSRF guard for cookie-authenticated writes.
+
+    SameSite=Lax doesn't cover sibling subdomains of the same site, so a write
+    that rides on the session cookie must come from an allowed frontend origin.
+    Bearer-token callers and cookie-less requests (guests, webhooks) are exempt:
+    a cross-site page can't attach either credential by itself.
+    """
+    if (
+        request.method in _UNSAFE_METHODS
+        and AUTH_COOKIE_NAME in request.cookies
+        and "authorization" not in request.headers
+        and _request_origin(request) not in CORS_ORIGINS
+    ):
+        return JSONResponse(status_code=403, content={"detail": "Cross-site request blocked"})
+    return await call_next(request)
 
 # Lightweight health check — used by the frontend's "backend waking up"
 # gate when we're on Render's free plan (cold-starts take ~50 s). No auth,
@@ -148,6 +188,12 @@ def _cancel_pipeline_on_disconnect(transport, task, ip: str) -> None:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """Voice chat: ticket auth, then audio + UI events over WS via Pipecat."""
+    # Browsers always send Origin on WebSockets; don't let other sites embed the
+    # voice line and spend our Gemini quota on their visitors.
+    origin = websocket.headers.get("origin")
+    if origin and origin.rstrip("/") not in CORS_ORIGINS:
+        await websocket.close(code=4001)
+        return
     ticket = websocket.query_params.get("ticket")
     if not ticket:
         await websocket.close(code=4001)

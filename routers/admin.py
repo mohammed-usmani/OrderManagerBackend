@@ -21,7 +21,6 @@ from dependencies import require_admin, require_roles
 from routers.menu import MenuItemResponse
 from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
-from services.auth_service import auth_service
 from services.events import subscribe_order_events
 from services.roles import CASHIER_ROLES, STAFF_ROLES
 
@@ -203,18 +202,13 @@ def _serialize_order(order, db) -> AdminOrderResponse:
 # --- Endpoints ---
 
 @router.get("/orders/stream")
-async def stream_orders(token: str = Query(..., description="JWT (EventSource can't send headers)")):
+async def stream_orders(user=Depends(require_roles(STAFF_ROLES))):
     """Server-sent stream of order-board change events for the live KDS.
 
-    Auth is via the ``token`` query param because the browser's EventSource API
-    cannot set an Authorization header. Any on-shift staff role may subscribe.
+    Authenticated by the session cookie (EventSource sends it with
+    ``withCredentials``), and the user is re-checked against the database, so a
+    removed or demoted staff member loses access immediately.
     """
-    try:
-        payload = auth_service.decode_token(token)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    if payload.get("role") not in STAFF_ROLES:
-        raise HTTPException(status_code=403, detail="Staff access required")
 
     async def gen():
         yield "retry: 3000\n\n"  # client reconnect backoff

@@ -45,6 +45,17 @@ MAX_SESSION_SECONDS = int(os.environ.get("MAX_SESSION_SECONDS", "900"))
 MAX_CONCURRENT_CALLS = int(os.environ.get("MAX_CONCURRENT_CALLS", "3"))
 
 JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
+
+# Browser auth: the JWT lives in this httpOnly cookie, never in JS. Secure by
+# default; set AUTH_COOKIE_SECURE=false only for local plain-http development.
+AUTH_COOKIE_NAME = "saffron_session"
+AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "true").lower() != "false"
+# Frontend origins allowed to call the API with the cookie (comma-separated).
+CORS_ORIGINS = [
+    o.strip().rstrip("/")
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 

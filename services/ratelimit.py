@@ -27,6 +27,20 @@ _ACTIVE = "vc:concurrent"
 _STALE_AFTER = MAX_SESSION_SECONDS + 60
 
 
+def allow(bucket: str, key: str, limit: int, window_s: int) -> bool:
+    """Fixed-window rate limit: at most ``limit`` hits per ``window_s`` for
+    ``key`` in ``bucket``. Fails open on Redis errors (logged)."""
+    counter = f"rl:{bucket}:{key}:{int(time.time() // window_s)}"
+    try:
+        hits = _redis.incr(counter)
+        if hits == 1:
+            _redis.expire(counter, window_s)
+        return hits <= limit
+    except Exception as e:
+        logger.warning(f"rate limit check failed, allowing: {e}")
+        return True
+
+
 def acquire_slot(call_id: str) -> tuple[bool, str]:
     """Try to take one of the global concurrency slots. (allowed, reason)."""
     try:

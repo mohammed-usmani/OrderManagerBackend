@@ -24,7 +24,7 @@ def client(db):
 @pytest.fixture
 def admin_token(client):
     resp = client.post("/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
-    return resp.json()["access_token"]
+    return client.cookies.get("saffron_session")
 
 
 def test_list_menu_is_public(client):
