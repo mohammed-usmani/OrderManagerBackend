@@ -11,8 +11,10 @@
 .env
 .env.*
 !.env.example
+*.cloudrun.yaml
 
 # Dev / VCS noise
+.claude/
 .git/
 .gitignore
 tests/
