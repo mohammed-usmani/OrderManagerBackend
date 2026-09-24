@@ -4,7 +4,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 # Make server/ importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -31,6 +31,9 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+_MIGRATION_LOCK = 7_419_221  # arbitrary app-wide advisory lock id
+
+
 def run_migrations_online() -> None:
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -40,6 +43,10 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
+            # Several instances may boot (and migrate) at once. Serialize them:
+            # the lock is held until this transaction commits, and the next
+            # instance then finds nothing left to upgrade.
+            connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK})
             context.run_migrations()
 
 

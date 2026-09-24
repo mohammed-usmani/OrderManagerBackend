@@ -28,6 +28,7 @@ from config import (
     AUTH_COOKIE_NAME,
     CORS_ORIGINS,
     MAX_SESSION_SECONDS,
+    REDIS_URL,
     SEED_ON_STARTUP,
 )
 from db.base import get_session
@@ -142,7 +143,36 @@ async def reject_cross_site_cookie_writes(request: Request, call_next):
 # no DB, no external calls — just confirms the process is serving.
 @app.get("/health")
 async def health():
+    """Liveness: the process is up. Deliberately touches nothing else."""
     return {"status": "ok"}
+
+
+def _ping_database() -> None:
+    from sqlalchemy import text
+
+    with get_session() as db:
+        db.execute(text("SELECT 1"))
+
+
+def _ping_redis() -> None:
+    import redis
+
+    redis.Redis.from_url(REDIS_URL, socket_timeout=2).ping()
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness: Postgres and Redis both answer. Route traffic only when 200."""
+    status = {}
+    for name, ping in (("database", _ping_database), ("redis", _ping_redis)):
+        try:
+            await asyncio.to_thread(ping)
+            status[name] = "ok"
+        except Exception as e:
+            logger.warning(f"readiness: {name} unavailable: {e}")
+            status[name] = "down"
+    code = 200 if all(v == "ok" for v in status.values()) else 503
+    return JSONResponse(status_code=code, content=status)
 
 
 # REST routers (no text chat)

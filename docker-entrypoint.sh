@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # Apply DB migrations (idempotent) then start the server.
 # Set RUN_MIGRATIONS=false to skip migrations on boot (e.g. if you run them
-# as a separate one-off Cloud Run Job).
+# as a separate one-off job). Concurrent boots are safe: migrations/env.py
+# takes a Postgres advisory lock.
 set -e
 
 if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then

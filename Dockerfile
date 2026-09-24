@@ -1,6 +1,6 @@
 # Saffron & Smoke — voice ordering backend (FastAPI + Pipecat + Gemini Live).
-# Built for Cloud Run (listens on $PORT, scales to zero). Local dev uses the
-# same image via ../docker-compose.yml.
+# Host-agnostic: listens on $PORT. Local dev uses the same image via
+# docker-compose.yml.
 
 FROM python:3.11-slim AS base
 
@@ -27,7 +27,16 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev
 
-# Cloud Run injects PORT (default 8080). main.py reads it.
+# Pipecat loads NLTK's punkt_tab tokenizer at import and would otherwise try to
+# download it on every cold start. Bake it into the image instead.
+ENV NLTK_DATA=/usr/local/share/nltk_data
+RUN python -c "import nltk; nltk.download('punkt_tab', download_dir='$NLTK_DATA', quiet=True)"
+
+# Run as an unprivileged user; the app never needs to write to /app.
+RUN useradd --system --uid 10001 --no-create-home app
+USER app
+
+# The host may inject PORT (default 8080). main.py reads it.
 ENV PORT=8080
 EXPOSE 8080
 
