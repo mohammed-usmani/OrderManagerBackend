@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -28,6 +28,7 @@ class Payment(Base):
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)  # final charged
     tip_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0, server_default="0", nullable=False)
     discount_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0, server_default="0", nullable=False)
+    discount_reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         String, default="created", nullable=False
     )  # created | paid | failed | refunded

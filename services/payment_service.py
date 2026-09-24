@@ -30,6 +30,11 @@ _UNBILLED = {"cart", "cancelled"}
 _SETTLED = Decimal("0.005")
 
 
+def _reason(discount, reason) -> str | None:
+    """A discount's reason, kept only when there is a discount."""
+    return (reason or "").strip() or None if discount else None
+
+
 class PaymentService:
     def __init__(self, db):
         self.db = db
@@ -100,14 +105,15 @@ class PaymentService:
 
     # --- checkout (Razorpay) ---
 
-    def create_checkout(self, *, order_id=None, session_id=None, tip=0, discount=0) -> dict:
+    def create_checkout(self, *, order_id=None, session_id=None, tip=0, discount=0,
+                        discount_reason=None) -> dict:
         amount, receipt = self._target_amount(order_id, session_id, tip, discount, lock=True)
         ro = create_razorpay_order(amount, receipt)
         pay = Payment(
             order_id=order_id, table_session_id=session_id,
             method="razorpay", provider="razorpay", provider_order_id=ro["id"],
             amount=amount, tip_amount=to_money(tip or 0), discount_amount=to_money(discount or 0),
-            status="created",
+            discount_reason=_reason(discount, discount_reason), status="created",
         )
         self.db.add(pay)
         self.db.flush()
@@ -139,12 +145,13 @@ class PaymentService:
         self._finalize(pay, actor)
         return pay
 
-    def settle_cash(self, *, order_id=None, session_id=None, tip=0, discount=0, actor=None) -> Payment:
+    def settle_cash(self, *, order_id=None, session_id=None, tip=0, discount=0,
+                    discount_reason=None, actor=None) -> Payment:
         amount, _ = self._target_amount(order_id, session_id, tip, discount, lock=True)
         pay = Payment(
             order_id=order_id, table_session_id=session_id, method="cash",
             amount=amount, tip_amount=to_money(tip or 0), discount_amount=to_money(discount or 0),
-            status="paid",
+            discount_reason=_reason(discount, discount_reason), status="paid",
         )
         self.db.add(pay)
         self.db.flush()
@@ -163,6 +170,7 @@ class PaymentService:
             order = self.orders.get_order_admin(pay.order_id)
             order.tip_amount = pay.tip_amount
             order.discount_amount = pay.discount_amount
+            order.discount_reason = pay.discount_reason
             order.payment_method = pay.method
             if order.status != "paid":
                 # Payment is orthogonal to the kitchen flow — close it out.
@@ -176,6 +184,7 @@ class PaymentService:
             self.db, actor=actor, action="payment.settle", entity="payment",
             entity_id=pay.id,
             meta={"method": pay.method, "amount": float(pay.amount),
+                  "discount": float(pay.discount_amount), "discount_reason": pay.discount_reason,
                   "order_id": pay.order_id, "table_session_id": pay.table_session_id},
         )
         self.db.flush()

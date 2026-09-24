@@ -216,3 +216,23 @@ def test_guest_quote_cannot_apply_a_discount(client, db):
     cart = _order(db)
     r = client.post("/payments/quote", json={"order_id": cart.id, "discount": 150})
     assert r.status_code == 403
+
+
+def test_discount_reason_is_kept_on_the_payment_order_and_audit(db):
+    from db.models.audit_log import AuditLog
+
+    cart = _order(db)
+    pay = PaymentService(db).settle_cash(order_id=cart.id, discount=20, discount_reason="regular guest")
+    assert pay.discount_reason == "regular guest"
+    assert cart.discount_reason == "regular guest"
+    audit = db.query(AuditLog).filter(AuditLog.entity_id == pay.id).one()
+    assert audit.meta["discount_reason"] == "regular guest"
+
+
+def test_cashier_can_send_a_discount_reason(client, db):
+    cart = _order(db)
+    headers = {"Authorization": f"Bearer {_token(db, 'cashier')}"}
+    r = client.post("/payments/cash", headers=headers,
+                    json={"order_id": cart.id, "discount": 10, "discount_reason": "birthday"})
+    assert r.status_code == 200
+    assert db.query(Payment).filter(Payment.order_id == cart.id).one().discount_reason == "birthday"

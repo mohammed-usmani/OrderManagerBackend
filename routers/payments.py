@@ -30,6 +30,7 @@ class Target(BaseModel):
     session_id: str | None = None
     tip: float = 0
     discount: float = 0
+    discount_reason: str | None = None
 
 
 def _check_discount(req: Target, user) -> None:
@@ -66,7 +67,8 @@ def create_razorpay_checkout(req: Target, db: Session = Depends(get_db), user=De
         raise HTTPException(status_code=503, detail="Online payment isn't configured.")
     try:
         out = PaymentService(db).create_checkout(
-            order_id=req.order_id, session_id=req.session_id, tip=req.tip, discount=req.discount)
+            order_id=req.order_id, session_id=req.session_id, tip=req.tip, discount=req.discount,
+            discount_reason=req.discount_reason)
         db.commit()
         return out
     except ValueError as e:
@@ -136,7 +138,7 @@ def settle_cash(req: Target, db: Session = Depends(get_db), actor=Depends(_requi
     try:
         pay = PaymentService(db).settle_cash(
             order_id=req.order_id, session_id=req.session_id,
-            tip=req.tip, discount=req.discount, actor=actor)
+            tip=req.tip, discount=req.discount, discount_reason=req.discount_reason, actor=actor)
         db.commit()
         return {"status": pay.status, "amount": float(pay.amount), "method": "cash"}
     except ValueError as e:
