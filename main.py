@@ -32,7 +32,7 @@ from config import (
     SEED_ON_STARTUP,
 )
 from db.base import get_session
-from pipeline.voice_pipeline import create_pipeline
+from pipeline.voice_pipeline import create_pipeline, load_call_context
 from routers import (
     admin,
     analytics,
@@ -270,8 +270,11 @@ async def websocket_endpoint(websocket: WebSocket):
             f"Voice client connected (anonymous parcel line): {ip} tz={user_timezone}"
         )
 
+        # Table/profile lookups run off the event loop (it serves every call's audio).
+        call_context = await asyncio.to_thread(load_call_context, table_token)
         pipeline, transport = create_pipeline(
-            websocket, user_timezone=user_timezone, table_token=table_token
+            websocket, user_timezone=user_timezone, table_token=table_token,
+            call_context=call_context,
         )
         task = PipelineTask(pipeline)
 

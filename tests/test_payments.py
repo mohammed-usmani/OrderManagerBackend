@@ -236,3 +236,27 @@ def test_cashier_can_send_a_discount_reason(client, db):
                     json={"order_id": cart.id, "discount": 10, "discount_reason": "birthday"})
     assert r.status_code == 200
     assert db.query(Payment).filter(Payment.order_id == cart.id).one().discount_reason == "birthday"
+
+
+def test_webhook_settles_a_captured_payment_off_the_event_loop(client, db, monkeypatch):
+    import asyncio
+    import json as _json
+
+    from routers import payments as payments_router
+
+    assert not asyncio.iscoroutinefunction(payments_router.razorpay_webhook)  # runs in the threadpool
+    monkeypatch.setattr(payments_router, "verify_webhook_signature", lambda body, sig: True)
+
+    cart = _order(db)
+    checkout = PaymentService(db).create_checkout(order_id=cart.id)
+    event = {"event": "payment.captured", "payload": {"payment": {"entity": {
+        "order_id": checkout["provider_order_id"], "id": "pay_webhook"}}}}
+    r = client.post("/payments/webhook", content=_json.dumps(event),
+                    headers={"x-razorpay-signature": "sig", "content-type": "application/json"})
+    assert r.status_code == 200
+    assert cart.status == "paid"
+
+
+def test_webhook_rejects_a_bad_signature(client):
+    r = client.post("/payments/webhook", content=b"{}", headers={"x-razorpay-signature": "nope"})
+    assert r.status_code == 400

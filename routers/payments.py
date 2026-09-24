@@ -8,7 +8,7 @@ discount. Cash settlement is staff-only (cashier/manager).
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -94,11 +94,21 @@ def verify_razorpay(req: ConfirmRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+async def _raw_body(request: Request) -> bytes:
+    return await request.body()
+
+
 @router.post("/webhook")
-async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
-    """Razorpay → us on payment.captured. Idempotent; verified by webhook secret."""
-    body = await request.body()
-    signature = request.headers.get("x-razorpay-signature", "")
+def razorpay_webhook(
+    body: bytes = Depends(_raw_body),
+    signature: str = Header("", alias="x-razorpay-signature"),
+    db: Session = Depends(get_db),
+):
+    """Razorpay → us on payment.captured. Idempotent; verified by webhook secret.
+
+    A plain ``def`` so FastAPI runs it (and its database work) in the
+    threadpool; only reading the raw body, which the signature needs, is async.
+    """
     if not verify_webhook_signature(body, signature):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
     try:

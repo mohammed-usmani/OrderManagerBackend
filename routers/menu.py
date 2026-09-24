@@ -1,5 +1,6 @@
 """Menu router: public read + admin CRUD."""
 
+import asyncio
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -135,6 +136,9 @@ class UploadImageResponse(BaseModel):
     image_url: str
 
 
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # menu photos; Cloudinary resizes for display
+
+
 @router.post("/upload-image", response_model=UploadImageResponse)
 async def upload_menu_image(
     file: UploadFile = File(...),
@@ -150,9 +154,15 @@ async def upload_menu_image(
         )
     if file.content_type and not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image.")
+    contents = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(contents) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Image must be under {MAX_IMAGE_BYTES // (1024 * 1024)} MB.",
+        )
     try:
-        contents = await file.read()
-        url = upload_image(contents)
+        # Cloudinary's client is synchronous; keep the upload off the event loop.
+        url = await asyncio.to_thread(upload_image, contents)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Upload failed: {e}")
     return UploadImageResponse(image_url=url)

@@ -17,6 +17,7 @@ Each tool:
   3. Returns a short text summary for the LLM to narrate.
 """
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -75,6 +76,18 @@ _NEED_CUSTOMER = (
 
 # Wrong code/phone + name + pincode combinations allowed per call before lookups stop.
 MAX_FAILED_LOOKUPS = 3
+
+
+async def _in_db(work):
+    """Run ``work(db)`` on a worker thread with its own session and return its
+    result. One event loop streams audio for every live call, so database
+    round-trips must never run on it. ``work`` should return plain data (cards,
+    strings, flags), not ORM rows, since the session closes when it returns."""
+    def run():
+        with get_session() as db:
+            return work(db)
+
+    return await asyncio.to_thread(run)
 
 def _resolve_tz(name: str | None) -> ZoneInfo:
     if name:
@@ -158,9 +171,8 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(stop)
             return
 
-        with get_session() as db:
+        def search(db):
             service = MenuService(db)
-            items: list = []
             # Exact ID hit first (e.g. "M01"). Include unavailable so an exact
             # ID for a temporarily-unavailable dish surfaces it (the card shows
             # the unavailable state) rather than falling through to fuzzy search.
@@ -168,8 +180,9 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
                 items = [service.get_item(query.strip().upper(), include_unavailable=True)]
             except ValueError:
                 items = service.search(query)
+            return [menu_item_to_card(i) for i in items]
 
-            cards = [menu_item_to_card(i) for i in items]
+        cards = await _in_db(search)
 
         await push_ui_event(
             params.llm,
@@ -222,16 +235,17 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         dietary_list = [t.strip() for t in dietary.split(",") if t.strip()]
         max_price_val = float(max_price) if max_price and max_price > 0 else None
 
-        with get_session() as db:
-            service = MenuService(db)
-            items = service.filter(
+        def filtered(db):
+            items = MenuService(db).filter(
                 category=category or None,
                 dietary=dietary_list or None,
                 spice_level=spice_level or None,
                 max_price=max_price_val,
                 keyword=keyword or None,
             )
-            cards = [menu_item_to_card(i) for i in items]
+            return [menu_item_to_card(i) for i in items]
+
+        cards = await _in_db(filtered)
 
         parts = []
         if category:
@@ -276,9 +290,9 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(stop)
             return
 
-        with get_session() as db:
-            items = MenuService(db).list_items(include_unavailable=False)
-            cards = [menu_item_to_card(i) for i in items]
+        cards = await _in_db(
+            lambda db: [menu_item_to_card(i) for i in MenuService(db).list_items(include_unavailable=False)]
+        )
 
         await push_ui_event(params.llm, "menu_results", {"title": "Our Menu", "items": cards})
 
@@ -330,20 +344,24 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(stop)
             return
 
-        with get_session() as db:
+        def verify(db):
             cust = CustomerService(db).verify(code_or_phone, name=name, place=pincode_or_area)
             if not cust:
-                session.failed_lookups += 1
-                await params.result_callback(
-                    "Those details don't match an account. Don't say whether the "
-                    "number or code exists. Ask them to check the details, or offer "
-                    "to register them as a new customer."
-                )
-                return
+                return None
             session.identify(cust)
-            card = verified_customer_card(cust)
             first_name = (cust.name or "").split()[0] if cust.name else "there"
-            area, preferences, allergies = cust.area, cust.preferences, cust.allergies
+            return verified_customer_card(cust), first_name, cust.area, cust.preferences, cust.allergies
+
+        found = await _in_db(verify)
+        if found is None:
+            session.failed_lookups += 1
+            await params.result_callback(
+                "Those details don't match an account. Don't say whether the "
+                "number or code exists. Ask them to check the details, or offer "
+                "to register them as a new customer."
+            )
+            return
+        card, first_name, area, preferences, allergies = found
 
         await push_ui_event(params.llm, "customer_card", card)
         bits = [f"Verified: {first_name} (code {card['code']})."]
@@ -402,43 +420,46 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             )
             return
 
-        with get_session() as db:
+        def register(db):
             existing_phone = normalize_phone(phone)
             if existing_phone and CustomerRepo(db).get_by_phone(existing_phone):
-                await params.result_callback(
-                    "That phone number is already registered. Don't reveal anything "
-                    "about that account — ask for their 4-digit code or look them up "
-                    "with lookup_customer (name and delivery pincode needed)."
-                )
-                return
+                return "taken", None
             ok, matched = ServiceAreaService(db).is_serviceable(pincode or area)
-            matched_name = matched.name if matched else None
-            matched_pincode = matched.pincode if matched else None
             if not ok:
-                await push_ui_event(
-                    params.llm,
-                    "delivery_check",
-                    {"query": area or pincode, "serviceable": False, "matched": None},
-                )
-                await params.result_callback(
-                    f"'{area or pincode}' is OUTSIDE our delivery area. Apologize "
-                    "warmly, explain we can't deliver there, and do NOT register "
-                    "or take an order."
-                )
-                return
-
+                return "outside", None
             cust = CustomerService(db).create_customer(
                 name=name,
                 phone=phone,
                 address_line=address,
-                area=area or matched_name,
-                pincode=pincode or matched_pincode,
+                area=area or (matched.name if matched else None),
+                pincode=pincode or (matched.pincode if matched else None),
                 landmark=landmark,
                 preferences=preferences,
                 allergies=allergies,
             )
             session.identify(cust)
-            card = customer_to_card(cust)
+            return "ok", customer_to_card(cust)
+
+        outcome, card = await _in_db(register)
+        if outcome == "taken":
+            await params.result_callback(
+                "That phone number is already registered. Don't reveal anything "
+                "about that account — ask for their 4-digit code or look them up "
+                "with lookup_customer (name and delivery pincode needed)."
+            )
+            return
+        if outcome == "outside":
+            await push_ui_event(
+                params.llm,
+                "delivery_check",
+                {"query": area or pincode, "serviceable": False, "matched": None},
+            )
+            await params.result_callback(
+                f"'{area or pincode}' is OUTSIDE our delivery area. Apologize "
+                "warmly, explain we can't deliver there, and do NOT register "
+                "or take an order."
+            )
+            return
 
         await push_ui_event(params.llm, "customer_card", card)
         spaced = " ".join(list(card["code"]))
@@ -500,10 +521,12 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback("Nothing to update — no fields provided.")
             return
 
-        with get_session() as db:
+        def update(db):
             cust = CustomerService(db).update_customer(session.customer_id, **fields)
             session.identify(cust)
-            card = verified_customer_card(cust)
+            return verified_customer_card(cust)
+
+        card = await _in_db(update)
 
         await push_ui_event(params.llm, "customer_card", card)
         await params.result_callback(
@@ -527,9 +550,11 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(stop)
             return
 
-        with get_session() as db:
+        def check(db):
             ok, matched = ServiceAreaService(db).is_serviceable(area_or_pincode)
-            matched_name = matched.name if matched else None
+            return ok, (matched.name if matched else None)
+
+        ok, matched_name = await _in_db(check)
 
         await push_ui_event(
             params.llm,
@@ -566,11 +591,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(_need_msg())
             return
 
-        with get_session() as db:
-            service = OrderService(db)
-            cart = _cart(service)
-            menu_repo = MenuRepo(db)
-            card = order_to_card(cart, menu_repo)
+        card = await _in_db(lambda db: order_to_card(_cart(OrderService(db)), MenuRepo(db)))
 
         await push_ui_event(params.llm, "cart_view", card)
 
@@ -621,19 +642,19 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(_need_msg())
             return
 
-        with get_session() as db:
-            service = OrderService(db)
-            menu_repo = MenuRepo(db)
+        def add(db):
+            service, menu_repo = OrderService(db), MenuRepo(db)
             cart = _cart(service)
-            try:
-                service.add_item(cart.id, item_id, quantity, special_instructions)
-            except ValueError as e:
-                await params.result_callback(str(e))
-                return
+            service.add_item(cart.id, item_id, quantity, special_instructions)
             db.refresh(cart)
-            card = order_to_card(cart, menu_repo)
             added = menu_repo.get_by_id(item_id)
-            added_name = added.name if added else item_id
+            return order_to_card(cart, menu_repo), (added.name if added else item_id)
+
+        try:
+            card, added_name = await _in_db(add)
+        except ValueError as e:
+            await params.result_callback(str(e))
+            return
 
         await push_ui_event(params.llm, "cart_view", card)
 
@@ -658,19 +679,19 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(_need_msg())
             return
 
-        with get_session() as db:
-            service = OrderService(db)
-            menu_repo = MenuRepo(db)
+        def remove(db):
+            service, menu_repo = OrderService(db), MenuRepo(db)
             cart = _cart(service)
             removed = menu_repo.get_by_id(item_id)
-            removed_name = removed.name if removed else item_id
-            try:
-                service.remove_item(cart.id, item_id)
-            except ValueError as e:
-                await params.result_callback(str(e))
-                return
+            service.remove_item(cart.id, item_id)
             db.refresh(cart)
-            card = order_to_card(cart, menu_repo)
+            return order_to_card(cart, menu_repo), (removed.name if removed else item_id)
+
+        try:
+            card, removed_name = await _in_db(remove)
+        except ValueError as e:
+            await params.result_callback(str(e))
+            return
 
         await push_ui_event(params.llm, "cart_view", card)
         await params.result_callback(
@@ -704,19 +725,19 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(_need_msg())
             return
 
-        with get_session() as db:
-            service = OrderService(db)
-            menu_repo = MenuRepo(db)
+        def set_quantity(db):
+            service, menu_repo = OrderService(db), MenuRepo(db)
             cart = _cart(service)
             named = menu_repo.get_by_id(item_id)
-            item_name = named.name if named else item_id
-            try:
-                service.set_item_quantity(cart.id, item_id, quantity)
-            except ValueError as e:
-                await params.result_callback(str(e))
-                return
+            service.set_item_quantity(cart.id, item_id, quantity)
             db.refresh(cart)
-            card = order_to_card(cart, menu_repo)
+            return order_to_card(cart, menu_repo), (named.name if named else item_id)
+
+        try:
+            card, item_name = await _in_db(set_quantity)
+        except ValueError as e:
+            await params.result_callback(str(e))
+            return
 
         await push_ui_event(params.llm, "cart_view", card)
         if quantity <= 0:
@@ -748,19 +769,18 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             return
 
         dine_in = session.is_dine_in
-        with get_session() as db:
-            service = OrderService(db)
-            menu_repo = MenuRepo(db)
+        def confirm(db):
+            service, menu_repo = OrderService(db), MenuRepo(db)
             cust = None if dine_in else CustomerRepo(db).get_by_id(session.customer_id)
-            cart = _cart(service)
-            try:
-                order = service.confirm_order(cart.id, customer=cust)
-            except ValueError as e:
-                await params.result_callback(str(e))
-                return
+            order = service.confirm_order(_cart(service).id, customer=cust)
             db.refresh(order)
-            card = order_to_card(order, menu_repo)
-            deliver_to = order.delivery_address or "the address on file"
+            return order_to_card(order, menu_repo), (order.delivery_address or "the address on file")
+
+        try:
+            card, deliver_to = await _in_db(confirm)
+        except ValueError as e:
+            await params.result_callback(str(e))
+            return
 
         await push_ui_event(params.llm, "order_confirmed", card)
         charges_str = ", ".join(
@@ -792,22 +812,19 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             await params.result_callback(_need_msg())
             return
 
-        with get_session() as db:
-            service = OrderService(db)
-            menu_repo = MenuRepo(db)
+        def cancel(db):
+            service, menu_repo = OrderService(db), MenuRepo(db)
             cart = _cart(service)
             if cart.status == "confirmed":
-                await params.result_callback(
-                    "Already confirmed — please speak to the manager."
-                )
-                return
-            try:
-                service.cancel_order(cart.id)
-            except ValueError as e:
-                await params.result_callback(str(e))
-                return
-            new_cart = _cart(service)
-            card = order_to_card(new_cart, menu_repo)
+                raise ValueError("Already confirmed — please speak to the manager.")
+            service.cancel_order(cart.id)
+            return order_to_card(_cart(service), menu_repo)
+
+        try:
+            card = await _in_db(cancel)
+        except ValueError as e:
+            await params.result_callback(str(e))
+            return
 
         await push_ui_event(params.llm, "cart_view", card)
         await params.result_callback("Cart cancelled.")
@@ -832,13 +849,11 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             )
             return
 
-        with get_session() as db:
-            service = OrderService(db)
-            try:
-                service.request_bill(session.table_session_id)
-            except ValueError as e:
-                await params.result_callback(str(e))
-                return
+        try:
+            await _in_db(lambda db: OrderService(db).request_bill(session.table_session_id))
+        except ValueError as e:
+            await params.result_callback(str(e))
+            return
 
         await push_ui_event(
             params.llm, "bill_requested", {"table_label": session.table_label}
@@ -880,15 +895,17 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             )
             return
 
-        with get_session() as db:
-            service = OrderService(db)
+        def history(db):
             menu_repo = MenuRepo(db)
-            all_orders = service.get_orders_for_customer(session.customer_id)
+            all_orders = OrderService(db).get_orders_for_customer(session.customer_id)
             counts: dict[str, int] = {}
             for o in all_orders:
                 counts[o.status] = counts.get(o.status, 0) + 1
             matches = [o for o in all_orders if not status or o.status == status]
             cards = [order_to_card(o, menu_repo) for o in matches[:limit]]
+            return cards, counts, bool(all_orders), bool(matches)
+
+        cards, counts, has_orders, has_matches = await _in_db(history)
 
         title = f"Orders ({status})" if status else "Your Orders"
         await push_ui_event(
@@ -897,9 +914,9 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             {"title": title, "orders": cards, "counts": counts},
         )
 
-        if not all_orders:
+        if not has_orders:
             msg = "You don't have any orders yet."
-        elif not matches:
+        elif not has_matches:
             msg = f"No orders with status '{status}'."
         else:
             summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
@@ -989,10 +1006,37 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
 # --- Pipeline factory ---------------------------------------------------
 
 
+def load_call_context(table_token: str | None) -> dict:
+    """Database lookups a new call needs, done once before the pipeline is built.
+    Synchronous: the WebSocket endpoint runs it on a worker thread.
+
+    ``table`` is the scanned table (None for parcel calls or an unknown QR) and
+    ``hours``/``timezone`` come from the editable restaurant profile, so "are we
+    open" tracks the admin's hours (None falls back to the built-in schedule).
+    """
+    context = {"table": None, "hours": None, "timezone": None}
+    if table_token:
+        try:
+            with get_session() as db:
+                context["table"] = TableService(db).resolve_qr(table_token)
+        except ValueError:
+            pass  # unknown QR — the call stays dine-in and asks for a rescan
+    try:
+        with get_session() as db:
+            from services.settings_service import SettingsService
+
+            profile = SettingsService(db).get_restaurant_profile()
+            context["hours"], context["timezone"] = profile.get("hours"), profile.get("timezone")
+    except Exception:
+        pass  # fall back to the legacy hardcoded schedule
+    return context
+
+
 def create_pipeline(
     websocket: WebSocket,
     user_timezone: str | None = None,
     table_token: str | None = None,
+    call_context: dict | None = None,
 ):
     """Create a fresh Gemini Live Native Audio pipeline per connection.
 
@@ -1021,13 +1065,13 @@ def create_pipeline(
 
     # One mutable session shared by all tool wrappers for this connection.
     session = CallSession()
+    call_context = call_context or {"table": None, "hours": None, "timezone": None}
     if table_token:
         # Dine-in: bind to the scanned table. Stay in dine-in mode even if the
         # token doesn't resolve — the agent asks the guest to scan the QR again.
         session.order_type = OrderType.DINE_IN
-        try:
-            with get_session() as db:
-                info = TableService(db).resolve_qr(table_token)
+        info = call_context["table"]
+        if info:
             session.seat(
                 table_id=info["table_id"],
                 table_label=info["label"],
@@ -1039,20 +1083,9 @@ def create_pipeline(
                 f"Dine-in call seated at Table {info['label']} ({info['zone_name']}, "
                 f"AC={info['is_ac']})"
             )
-        except ValueError:
+        else:
             logger.warning("Dine-in table_token didn't resolve — agent will ask for a QR scan")
-
-    # Load the editable restaurant profile so "are we open" tracks admin hours.
-    _profile_hours, _profile_tz = None, None
-    try:
-        with get_session() as db:
-            from services.settings_service import SettingsService
-            _profile = SettingsService(db).get_restaurant_profile()
-            _profile_hours, _profile_tz = _profile.get("hours"), _profile.get("timezone")
-    except Exception:
-        pass  # fall back to the legacy hardcoded schedule
-
-    # Fresh per-connection time context prepended to the mode-appropriate prompt.
+    _profile_hours, _profile_tz = call_context["hours"], call_context["timezone"]
     system_instruction = (
         build_time_context_message(user_timezone, hours=_profile_hours, timezone=_profile_tz)
         + "\n\n"
