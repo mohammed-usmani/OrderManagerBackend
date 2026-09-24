@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,15 @@ from db.base import Base
 
 class MenuItem(Base):
     __tablename__ = "menu_items"
+    # Declared so autogenerate keeps the HNSW index the embeddings migration built.
+    __table_args__ = (
+        Index(
+            "ix_menu_items_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # e.g. "M01"
     name: Mapped[str] = mapped_column(String, nullable=False)

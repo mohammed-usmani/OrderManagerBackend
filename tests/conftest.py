@@ -22,18 +22,7 @@ _db_ready = False
 def setup_test_db():
     global _db_ready
     from db.base import Base
-    import db.models.user  # noqa: F401
-    import db.models.menu  # noqa: F401
-    import db.models.order  # noqa: F401
-    import db.models.chat  # noqa: F401
-    import db.models.customer  # noqa: F401
-    import db.models.service_area  # noqa: F401
-    import db.models.floor  # noqa: F401
-    import db.models.dining_zone  # noqa: F401
-    import db.models.restaurant_table  # noqa: F401
-    import db.models.table_session  # noqa: F401
-    import db.models.audit_log  # noqa: F401
-    import db.models.payment  # noqa: F401
+    import db.models  # noqa: F401  # registers every model
 
     test_engine = create_engine(TEST_DATABASE_URL)
     try:

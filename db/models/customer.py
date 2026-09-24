@@ -9,7 +9,7 @@ secondary lookup, their phone number. This table is fully decoupled from
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -17,13 +17,18 @@ from db.base import Base
 
 class Customer(Base):
     __tablename__ = "customers"
+    # Matches the schema the migrations create: unique constraints + plain indexes.
+    __table_args__ = (
+        UniqueConstraint("code", name="customers_code_key"),
+        UniqueConstraint("phone", name="customers_phone_key"),
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
     # The memorable identifier the customer quotes on return (e.g. "4821").
-    code: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
-    phone: Mapped[str | None] = mapped_column(String, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    phone: Mapped[str | None] = mapped_column(String, index=True)
     name: Mapped[str | None] = mapped_column(String)
 
     # Delivery details.

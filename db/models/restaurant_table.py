@@ -13,7 +13,7 @@ an open tab" lives on :class:`TableSession`.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
@@ -26,6 +26,8 @@ def _qr_token() -> str:
 
 class RestaurantTable(Base):
     __tablename__ = "restaurant_tables"
+    # Matches the schema the migrations create: unique constraint + plain index.
+    __table_args__ = (UniqueConstraint("qr_token", name="restaurant_tables_qr_token_key"),)
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
@@ -45,7 +47,7 @@ class RestaurantTable(Base):
 
     # Encoded in the QR tent card → /t/<qr_token>. Unique + indexed for lookup.
     qr_token: Mapped[str] = mapped_column(
-        String, unique=True, index=True, nullable=False, default=_qr_token
+        String, index=True, nullable=False, default=_qr_token
     )
     # free | occupied | needs_bill | cleaning
     status: Mapped[str] = mapped_column(String, default="free", nullable=False)

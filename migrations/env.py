@@ -13,17 +13,7 @@ load_dotenv()
 
 # Import all models so Alembic sees them
 from db.base import Base  # noqa: E402
-import db.models.user  # noqa: F401, E402
-import db.models.menu  # noqa: F401, E402
-import db.models.order  # noqa: F401, E402
-import db.models.chat  # noqa: F401, E402
-import db.models.customer  # noqa: F401, E402
-import db.models.service_area  # noqa: F401, E402
-import db.models.floor  # noqa: F401, E402
-import db.models.dining_zone  # noqa: F401, E402
-import db.models.restaurant_table  # noqa: F401, E402
-import db.models.table_session  # noqa: F401, E402
-import db.models.app_setting  # noqa: F401, E402
+import db.models  # noqa: F401, E402  # registers every model
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
