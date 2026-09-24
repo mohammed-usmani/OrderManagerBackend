@@ -1,8 +1,17 @@
+import os
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-TEST_DATABASE_URL = "postgresql://mohammed:mohammed%40123@localhost/restaurant_test"
+# Defaults to the docker-compose database (`docker compose up -d db`).
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/restaurant_test"
+)
+
+# Point the app itself at the test database/Redis before anything imports `config`,
+# so TestClient(app) startup seeding and background work never touch .env's DB.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6380/15")
 
 # Set True once the schema is created. DB-backed tests skip when it's False
 # (e.g. the pgvector extension can't be enabled without a superuser locally).
