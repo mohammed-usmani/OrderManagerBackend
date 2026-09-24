@@ -1126,4 +1126,7 @@ def create_pipeline(
         ]
     )
 
-    return pipeline
+    # Return the transport too: the caller wires an on_client_disconnected
+    # handler to it so a browser hang-up cancels the pipeline (and frees the
+    # concurrency slot) immediately, instead of hanging until the session cap.
+    return pipeline, transport

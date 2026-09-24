@@ -118,6 +118,27 @@ app.include_router(payments.router)
 
 # --- Voice WebSocket endpoint ---
 
+def _cancel_pipeline_on_disconnect(transport, task, ip: str) -> None:
+    """Free the concurrency slot the instant the browser hangs up.
+
+    Pipecat's FastAPI transport fires ``on_client_disconnected`` when the client
+    closes the socket, but it does NOT inject an EndFrame — so ``runner.run(task)``
+    would keep awaiting (the Gemini Live upstream socket is still open) until the
+    session-cap watchdog cancels it ~15 min later. Until then the call still holds
+    its slot, so stopping the mic mid-call leaked one slot per restart → after a
+    few taps every line reads "busy" and new taps queue forever.
+
+    Cancelling the task here makes ``runner.run`` return immediately, so the
+    ``finally: release_slot`` in the endpoint runs right away. Extracted (and
+    unit-tested) so the wiring can't silently regress.
+    """
+
+    @transport.event_handler("on_client_disconnected")
+    async def _on_client_disconnected(_transport, _client):  # noqa: ANN001
+        logger.info(f"Voice client hung up — cancelling pipeline to free slot: {ip}")
+        await task.cancel()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """Voice chat: ticket auth, then audio + UI events over WS via Pipecat."""
@@ -167,10 +188,14 @@ async def websocket_endpoint(websocket: WebSocket):
             f"Voice client connected (anonymous parcel line): {ip} tz={user_timezone}"
         )
 
-        pipeline = create_pipeline(
+        pipeline, transport = create_pipeline(
             websocket, user_timezone=user_timezone, table_token=table_token
         )
         task = PipelineTask(pipeline)
+
+        # Hang-up → cancel the pipeline now so the slot is released immediately
+        # (otherwise it leaks until the session cap; see helper docstring).
+        _cancel_pipeline_on_disconnect(transport, task, ip)
 
         # Kick Gemini Live into a ready state. The service only becomes ready for
         # realtime audio after its _handle_context runs, which only fires on a
