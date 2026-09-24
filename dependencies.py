@@ -33,6 +33,19 @@ def get_current_user(
     return user
 
 
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+    db=Depends(get_db),
+):
+    """The signed-in user if a valid token was sent, otherwise None (never 401s)."""
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials, db)
+    except HTTPException:
+        return None
+
+
 def require_admin(current_user=Depends(get_current_user)):
     """Require the current user to be an admin (owner/manager). 403 otherwise."""
     if not current_user.is_admin:

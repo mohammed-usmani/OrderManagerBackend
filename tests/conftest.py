@@ -41,6 +41,18 @@ def setup_test_db():
         yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _fresh_test_redis():
+    """Clear the tests' own Redis index so lockouts/tickets don't carry over runs."""
+    import redis
+
+    try:
+        redis.Redis.from_url(os.environ["REDIS_URL"]).flushdb()
+    except redis.RedisError as e:
+        print(f"[conftest] Test Redis unavailable: {e}")
+    yield
+
+
 @pytest.fixture
 def db():
     if not _db_ready:

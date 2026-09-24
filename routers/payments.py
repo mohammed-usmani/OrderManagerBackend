@@ -1,9 +1,9 @@
 """Payments router: Razorpay (test) checkout + verify + webhook, and cash settle.
 
-Razorpay endpoints are public: creating a checkout is harmless (funds go to the
-restaurant) and verify is protected by an unforgeable signature — this lets a
-dine-in guest pay from their own phone without a login. Cash settlement is
-staff-only (cashier/manager).
+Razorpay endpoints are public so a dine-in guest can pay from their own phone
+without a login: the amount is computed server-side and verify is protected by
+an unforgeable signature. Guests may add a tip, but only cashiers can apply a
+discount. Cash settlement is staff-only (cashier/manager).
 """
 
 import json
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from config import RAZORPAY_KEY_ID
 from db.base import get_db
 from db.models.payment import Payment
-from dependencies import require_roles
+from dependencies import get_optional_user, require_roles
 from services.payment_service import PaymentService
 from services.payments import razorpay_enabled, verify_webhook_signature
 from services.roles import CASHIER_ROLES
@@ -32,6 +32,11 @@ class Target(BaseModel):
     discount: float = 0
 
 
+def _check_discount(req: Target, user) -> None:
+    if req.discount and getattr(user, "role", None) not in CASHIER_ROLES:
+        raise HTTPException(status_code=403, detail="Only staff can apply a discount")
+
+
 class ConfirmRequest(BaseModel):
     provider_order_id: str
     razorpay_payment_id: str
@@ -45,7 +50,8 @@ def payment_config():
 
 
 @router.post("/quote")
-def quote(req: Target, db: Session = Depends(get_db)):
+def quote(req: Target, db: Session = Depends(get_db), user=Depends(get_optional_user)):
+    _check_discount(req, user)
     try:
         return {"amount_due": PaymentService(db).amount_due(
             order_id=req.order_id, session_id=req.session_id, tip=req.tip, discount=req.discount)}
@@ -54,7 +60,8 @@ def quote(req: Target, db: Session = Depends(get_db)):
 
 
 @router.post("/razorpay/order")
-def create_razorpay_checkout(req: Target, db: Session = Depends(get_db)):
+def create_razorpay_checkout(req: Target, db: Session = Depends(get_db), user=Depends(get_optional_user)):
+    _check_discount(req, user)
     if not razorpay_enabled():
         raise HTTPException(status_code=503, detail="Online payment isn't configured.")
     try:
