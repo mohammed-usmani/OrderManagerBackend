@@ -57,7 +57,7 @@ Backend for a voice-first Indian restaurant. Guests talk to **Arjun**, the AI ho
 | Database | PostgreSQL + **pgvector** · SQLAlchemy 2 · Alembic |
 | Menu search | Mistral `mistral-embed` embeddings (semantic), falling back to keyword search |
 | Realtime | Redis — WS tickets, call slots, JWT deny-list, order-event pub/sub |
-| Auth | bcrypt + JWT (python-jose), roles: owner · manager · cashier · waiter · chef |
+| Auth | bcrypt + JWT (python-jose) in an httpOnly session cookie, roles: owner · manager · cashier · waiter · chef |
 | Payments | Razorpay (test mode) + cash |
 | Images | Cloudinary (optional) |
 | Package mgmt | [uv](https://docs.astral.sh/uv/) |
@@ -139,6 +139,9 @@ On startup the server seeds the menu (only into an empty table; afterwards it ju
 | `GEMINI_MODEL` · `GEMINI_VOICE` | · | `models/gemini-3.1-flash-live-preview` · `Charon` |
 | `REDIS_URL` | · | `redis://localhost:6379` |
 | `JWT_EXPIRE_DAYS` | · | `7` |
+| `CORS_ORIGINS` | ✓ in prod | comma-separated frontend origins allowed to use the session cookie; `http://localhost:3000` by default. Production: `https://order-manager.mohammedusmani.me` |
+| `AUTH_COOKIE_SECURE` | · | `true`; set `false` only for local plain-http development |
+| `SEED_ON_STARTUP` | · | `true`; seeds only empty tables. Set `false` once a deployment is set up |
 | `MAX_CONCURRENT_CALLS` | · | `3` (Gemini free tier allows about 3 live sessions) |
 | `MAX_SESSION_SECONDS` | · | `900` |
 | `MISTRAL_API_KEY` | · | semantic menu search; keyword search without it |
@@ -156,7 +159,7 @@ Full OpenAPI docs at `http://localhost:8000/docs`. Access levels: **public**, **
 
 | Prefix | What | Access |
 |---|---|---|
-| `/auth` | register, login, logout (revokes the token), `ws-ticket` | public |
+| `/auth` | register, login (set the session cookie), `me`, logout (revokes + clears it), `ws-ticket` | public |
 | `WS /ws?ticket=…` | voice call | ticket |
 | `/menu` | catalog read · CRUD, image upload, re-embed | public · admin |
 | `/orders` | a customer's orders and cart | user |
@@ -215,7 +218,14 @@ The server itself also sends `time_warning` and `session_end` when a call reache
 uv run pytest -q
 ```
 
-Tests run against a real PostgreSQL database, `restaurant_test` (connection string in `tests/conftest.py`). It needs the `vector` extension; database tests are skipped if setup fails. Importing `config` needs the required env vars, so keep a `.env` in place.
+Tests run against a real PostgreSQL database and Redis — the docker-compose ones by default:
+
+```bash
+docker compose up -d db redis
+docker compose exec db psql -U postgres -c "CREATE DATABASE restaurant_test;"   # once
+```
+
+Override with `TEST_DATABASE_URL` / `TEST_REDIS_URL` (the tests use Redis index 15 and clear it per test). Each test runs in a transaction that is rolled back, and the app is pointed at the test database, so nothing touches the `.env` database. Importing `config` still needs the required env vars, so keep a `.env` in place.
 
 ---
 
