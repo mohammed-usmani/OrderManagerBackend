@@ -52,7 +52,13 @@ def _shape_for(seats: int) -> str:
 
 
 def seed_floor(db) -> None:
-    """Insert/attach floors, zones and tables; back-fill table positions."""
+    """First run only: create the demo floors, zones and tables (attaching any
+    legacy zones). Once a floor exists the layout belongs to the owner, so a
+    deleted or renamed table must not come back on the next boot."""
+    from db.models.floor import Floor
+
+    if db.query(Floor.id).first() is not None:
+        return
     floor_repo = FloorRepo(db)
     zone_repo = ZoneRepo(db)
     table_repo = TableRepo(db)

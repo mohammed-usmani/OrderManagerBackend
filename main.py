@@ -19,7 +19,7 @@ from pipecat.frames.frames import LLMRunFrame, OutputTransportMessageUrgentFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 
-from config import ADMIN_EMAIL, ADMIN_PASSWORD, MAX_SESSION_SECONDS
+from config import ADMIN_EMAIL, ADMIN_PASSWORD, MAX_SESSION_SECONDS, SEED_ON_STARTUP
 from db.base import get_session
 from pipeline.voice_pipeline import create_pipeline
 from routers import (
@@ -51,8 +51,7 @@ def _client_ip(websocket: WebSocket) -> str:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Seed data on startup
+def seed_database() -> None:
     with get_session() as db:
         from db.seeds.areas_seed import seed_service_areas
         from db.seeds.floor_seed import seed_floor
@@ -61,11 +60,18 @@ async def lifespan(app: FastAPI):
         seed_admin(db, email=ADMIN_EMAIL, password=ADMIN_PASSWORD)
         seed_service_areas(db)
         seed_floor(db)
-        # Seed the default bill charge policy + prime the billing cache so
-        # compute_bill uses the admin-editable policy from the first request.
+    logger.info("Database seeded")
+
+
+async def lifespan(app: FastAPI):
+    if SEED_ON_STARTUP:
+        seed_database()
+
+    # Seed the default bill charge policy + prime the billing cache so
+    # compute_bill uses the admin-editable policy from the first request.
+    with get_session() as db:
         from services.settings_service import SettingsService
         SettingsService(db).load_into_cache()
-        logger.info("Database seeded")
 
     # Backfill semantic-search embeddings for any menu items missing them.
     # Best-effort: never block startup if embeddings or the vector column are

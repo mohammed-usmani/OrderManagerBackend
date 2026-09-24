@@ -45,9 +45,12 @@ SERVICE_AREAS: list[tuple[str, str, list[str]]] = [
 
 
 def seed_service_areas(db) -> None:
-    """Insert any missing service areas (idempotent by name)."""
+    """First run only: once any service area exists the list belongs to the
+    owner, so deleted areas must not come back on the next boot."""
     repo = ServiceAreaRepo(db)
     existing = {a.name for a in repo.list_all()}
+    if existing:
+        return
     added = 0
     for name, pincode, aliases in SERVICE_AREAS:
         if name in existing:

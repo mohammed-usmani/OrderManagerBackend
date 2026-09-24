@@ -12,6 +12,8 @@ TEST_DATABASE_URL = os.environ.get(
 # so TestClient(app) startup seeding and background work never touch .env's DB.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6380/15")
+# Tests seed what they need inside their own rolled-back transaction.
+os.environ["SEED_ON_STARTUP"] = "false"
 
 # Set True once the schema is created. DB-backed tests skip when it's False
 # (e.g. the pgvector extension can't be enabled without a superuser locally).
@@ -43,10 +45,15 @@ def setup_test_db():
 def db():
     if not _db_ready:
         pytest.skip("test DB not ready (pgvector extension / superuser required)")
-    from sqlalchemy.orm import Session  # noqa: F401
+    from sqlalchemy.orm import Session
+
+    # One outer transaction per test; commits inside the code under test (e.g.
+    # router handlers) become savepoints, so everything is rolled back after.
     test_engine = create_engine(TEST_DATABASE_URL)
-    TestSession = sessionmaker(bind=test_engine)
-    session = TestSession()
+    connection = test_engine.connect()
+    outer = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
     yield session
-    session.rollback()
     session.close()
+    outer.rollback()
+    connection.close()

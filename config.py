@@ -48,6 +48,10 @@ JWT_SECRET_KEY = os.environ["JWT_SECRET_KEY"]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 
+# Seed menu, admin, service areas and floor plan on startup (first run fills
+# empty tables only). Set to "false" once a deployment is set up.
+SEED_ON_STARTUP = os.environ.get("SEED_ON_STARTUP", "true").lower() != "false"
+
 ADMIN_EMAIL = os.environ["ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 
