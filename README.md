@@ -10,7 +10,7 @@ Backend for a voice-first Indian restaurant. Guests talk to **Arjun**, the AI ho
 
 - **Voice ordering** — a Pipecat pipeline around **Gemini Live native audio**: the caller's speech goes straight into one realtime model that listens, calls restaurant tools, and answers in speech. No separate STT or TTS.
 - **Two call modes**
-  - **Parcel** (takeaway/delivery): looks up or registers the customer by a 4-digit code or phone number, checks the delivery area, takes the order.
+  - **Parcel** (takeaway/delivery): a returning customer is verified with their 4-digit code or phone **plus** the name and delivery pincode on the account (new ones register), then the delivery area is checked and the order taken.
   - **Dine-in**: the guest scans the table's QR code, so the call is already bound to that table; they can order and ask for the bill.
 - **Live UI canvas** — tools push `ui_event` frames over the same socket (menu results, cart, customer card, delivery check, order confirmation, bill, order history) so the screen follows the conversation.
 - **Back-office** — role-based access for owner, manager, cashier, waiter and chef: a real-time kitchen feed (Redis pub/sub → SSE), order edits/voids/refunds, table transfer and merge, floors/zones/tables with QR codes, 86-ing dishes, customers, staff, restaurant profile, charge policy and analytics.
@@ -191,10 +191,9 @@ Each tool is a Pipecat direct function (exposed to the model with a `pc_` prefix
 | `cancel_order` | both | `cart_view` | cancel before payment |
 | `end_conversation` | both | `session_end` | hang up after the closing line |
 | `get_current_datetime` | both | — | restaurant time + caller's timezone |
-| `lookup_customer` · `register_customer` · `update_customer` | parcel | `customer_card` | find by 4-digit code or phone, register, edit |
+| `lookup_customer` · `register_customer` · `update_customer` | parcel | `customer_card` | verify (code/phone + name + pincode, 3 tries per call), register (never an existing phone), edit |
 | `check_delivery_area` | parcel | `delivery_check` | area/pincode allowlist |
 | `search_my_orders` | parcel | `orders_list` | order history |
-| `set_table` | dine-in | — | bind the call to a table by number (if the QR didn't) |
 | `request_bill` | dine-in | `bill_requested` | ask for the bill |
 
 The server itself also sends `time_warning` and `session_end` when a call reaches its time limit.
