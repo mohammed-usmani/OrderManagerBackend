@@ -6,7 +6,6 @@ OutputTransportMessageUrgentFrame which the protobuf serializer wraps in a
 MessageFrame(data=json).
 """
 
-import json
 from typing import Any
 
 from pipecat.frames.frames import OutputTransportMessageUrgentFrame

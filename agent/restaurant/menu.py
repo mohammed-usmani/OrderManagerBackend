@@ -261,36 +261,3 @@ MENU = {
         {"id": "BV06", "name": "Bottled Water", "price": 50, "serving": "500ml", "available": True},
     ],
 }
-
-
-def get_full_menu_text() -> str:
-    """Return the full menu as formatted text for the agent's context."""
-    lines = []
-    for category, items in MENU.items():
-        lines.append(f"\n{'=' * 40}")
-        lines.append(f"  {category.upper()}")
-        lines.append(f"{'=' * 40}")
-        for item in items:
-            lines.append(f"\n[{item['id']}] {item['name']} — ₹{item['price']} ({item['serving']})")
-            if "description" in item:
-                lines.append(f"  {item['description']}")
-            if "taste_profile" in item:
-                lines.append(f"  Taste: {item['taste_profile']}")
-            if "popularity" in item:
-                lines.append(f"  Rating: {'★' * int(item['popularity'])}{'☆' * (5 - int(item['popularity']))} ({item['popularity']}/5) — {item.get('popularity_note', '')}")
-            if "spice_level" in item:
-                lines.append(f"  Spice: {item['spice_level']}")
-            if "dietary" in item:
-                lines.append(f"  Dietary: {', '.join(item['dietary'])}")
-    return "\n".join(lines)
-
-
-def find_dish(query: str) -> list[dict]:
-    """Search the menu by name or ID (case-insensitive)."""
-    query_lower = query.lower()
-    results = []
-    for items in MENU.values():
-        for item in items:
-            if query_lower in item["name"].lower() or query_lower == item["id"].lower():
-                results.append(item)
-    return results

@@ -17,7 +17,7 @@ Each tool:
   3. Returns a short text summary for the LLM to narrate.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import WebSocket
@@ -79,14 +79,6 @@ def _resolve_tz(name: str | None) -> ZoneInfo:
         except Exception:
             pass
     return RESTAURANT_TZ
-
-
-def _format_when(dt: datetime | None, tz: ZoneInfo) -> str:
-    if dt is None:
-        return "unknown"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(tz).strftime("%b %d, %I:%M %p %Z")
 
 
 def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):

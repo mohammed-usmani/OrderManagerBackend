@@ -16,12 +16,6 @@ class ZoneService:
     def list_zones(self, active_only: bool = False):
         return self.repo.list_all(active_only=active_only)
 
-    def get_zone(self, zone_id: str):
-        zone = self.repo.get_by_id(zone_id)
-        if not zone:
-            raise ValueError("Zone not found")
-        return zone
-
     def create_zone(self, **kwargs):
         floor_id = kwargs.get("floor_id")
         if floor_id is not None and not FloorRepo(self.db).get_by_id(floor_id):

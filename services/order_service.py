@@ -521,36 +521,6 @@ class OrderService:
         self.db.flush()
         publish_order_event("merge", table_session_id=into_session_id)
 
-    def mark_awaiting_payment(self, order_id: str) -> Order:
-        order = self.order_repo.get_by_id(order_id)
-        if not order or order.status != "confirmed":
-            raise ValueError(f"Order must be in 'confirmed' status")
-        order.status = "awaiting_payment"
-        self.db.flush()
-        return order
-
-    def mark_paid(self, order_id: str) -> Order:
-        order = self.order_repo.get_by_id(order_id)
-        if not order or order.status != "awaiting_payment":
-            raise ValueError("Order must be in 'awaiting_payment' status")
-        order.status = "paid"
-        order.paid_at = datetime.utcnow()
-        self.db.flush()
-        session = self.chat_repo.get_session_for_order(order_id)
-        if session:
-            session.status = "closed"
-            session.closed_at = datetime.utcnow()
-            self.db.flush()
-        return order
-
-    def mark_payment_failed(self, order_id: str) -> Order:
-        order = self.order_repo.get_by_id(order_id)
-        if not order or order.status != "awaiting_payment":
-            raise ValueError("Order must be in 'awaiting_payment' status")
-        order.status = "confirmed"
-        self.db.flush()
-        return order
-
     def get_orders(self, user_id: str) -> list[Order]:
         return self.order_repo.get_all_for_user(user_id)
 

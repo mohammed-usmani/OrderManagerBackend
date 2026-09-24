@@ -101,8 +101,6 @@ server/
 └── deploy.sh · DEPLOY.md     Cloud Run deployment
 ```
 
-`pipeline/fallback_llm.py`, `voxtral_stt.py`, `voxtral_tts.py` and `text_input.py` are from the earlier Mistral/Voxtral voice stack and are no longer imported.
-
 ---
 
 ## Getting started

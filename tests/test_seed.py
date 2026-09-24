@@ -40,7 +40,6 @@ def test_seed_admin_creates_admin_user(db):
 def test_seed_admin_is_idempotent(db):
     seed_admin(db, email="admin2@test.com", password="pass")
     seed_admin(db, email="admin2@test.com", password="pass")  # no-op
-    repo = UserRepo(db)
     from db.models.user import User
     count = db.query(User).filter(User.email == "admin2@test.com").count()
     assert count == 1

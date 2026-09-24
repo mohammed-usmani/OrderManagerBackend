@@ -28,7 +28,7 @@ def test_get_or_create_cart_creates_once(db):
 
 def test_add_item_to_cart(db):
     user = _make_user(db)
-    menu_item = _make_menu_item(db, "OS02")
+    _make_menu_item(db, "OS02")
     service = OrderService(db)
     cart = service.get_or_create_cart(user.id)
 
@@ -51,7 +51,7 @@ def test_add_unavailable_item_raises(db):
 
 def test_remove_item(db):
     user = _make_user(db)
-    menu_item = _make_menu_item(db, "OS04")
+    _make_menu_item(db, "OS04")
     service = OrderService(db)
     cart = service.get_or_create_cart(user.id)
     service.add_item(cart.id, "OS04", quantity=1)
@@ -63,7 +63,7 @@ def test_remove_item(db):
 
 def test_confirm_order(db):
     user = _make_user(db)
-    menu_item = _make_menu_item(db, "OS05")
+    _make_menu_item(db, "OS05")
     service = OrderService(db)
     cart = service.get_or_create_cart(user.id)
     service.add_item(cart.id, "OS05", quantity=1)
@@ -117,20 +117,3 @@ def test_refund_only_paid(db):
         service.advance_status(cart.id, s)
     refunded = service.refund_order(cart.id, reason="customer complaint")
     assert refunded.refunded is True and refunded.refund_reason == "customer complaint"
-
-
-def test_payment_failure_keeps_session_active(db):
-    user = _make_user(db)
-    menu_item = _make_menu_item(db, "OS06")
-    service = OrderService(db)
-    cart = service.get_or_create_cart(user.id)
-    service.add_item(cart.id, "OS06", quantity=1)
-    service.confirm_order(cart.id)
-    service.mark_awaiting_payment(cart.id)
-
-    order = service.mark_payment_failed(cart.id)
-    assert order.status == "confirmed"
-
-    from db.repositories.chat_repo import ChatRepo
-    session = ChatRepo(db).get_session_for_order(cart.id)
-    assert session.status == "active"

@@ -11,7 +11,6 @@ from db.repositories.order_repo import OrderRepo
 from dependencies import require_admin
 from pipeline.ui_events import compute_bill
 from services.customer_service import CustomerService
-from services.menu_service import MenuService
 
 router = APIRouter(prefix="/customers", tags=["customers"])
 
@@ -105,7 +104,6 @@ def get_customer_orders(
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ):
-    menu_service = MenuService(db)
     orders = OrderRepo(db).get_all_for_customer(customer_id)
     summaries: list[CustomerOrderSummary] = []
     for o in orders:

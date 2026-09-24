@@ -28,8 +28,8 @@ inside one WebSocket session.
 
 ## What's different in the pipeline
 
-- `VoxtralSTTService`, `FallbackLLMService`, `VoxtralTTSService` are no
-  longer imported (`pipeline/voxtral_*.py`, `pipeline/fallback_llm.py`).
+- `VoxtralSTTService`, `FallbackLLMService` and `VoxtralTTSService` have been
+  removed from the codebase.
 - `GeminiLiveLLMService(api_key=..., tools=..., settings=...)` replaces all
   three.
 - Output audio is **24 kHz mono PCM16** (same as before, so the browser
@@ -50,8 +50,10 @@ inside one WebSocket session.
 
 ## Going back to Voxtral + Mistral/Groq
 
-The old services are still in `pipeline/`. Swap `GeminiLiveLLMService` in
-`pipeline/voice_pipeline.py` for `VoxtralSTTService → FallbackLLMService →
-VoxtralTTSService`, and set `MISTRAL_API_KEY`, `GROQ_API_KEY` and `VOICE_ID`.
-`git show 980a54c^:pipeline/voice_pipeline.py` has the last version with that
-pipeline wired in (`980a54c` is the switch to Gemini Live).
+The old services were removed once Gemini Live became the only engine. They
+are in git history: `git show 980a54c^:pipeline/voice_pipeline.py` has the last
+pipeline that wired them together, and the service classes live in
+`pipeline/voxtral_stt.py`, `pipeline/voxtral_tts.py` and
+`pipeline/fallback_llm.py` at that commit. Restoring them also needs the
+`groq` and `mistral` extras on `pipecat-ai` and `MISTRAL_API_KEY`,
+`GROQ_API_KEY` and `VOICE_ID`.

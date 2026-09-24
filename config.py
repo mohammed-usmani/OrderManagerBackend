@@ -7,12 +7,6 @@ load_dotenv()
 # feature but search degrades to keyword-only if it's missing.
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 
-# Legacy / fallback-path keys — NOT used by the active Gemini Live pipeline.
-# Optional so deployments don't need to provide keys they'll never use.
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
-VOICE_ID = os.environ.get("VOICE_ID", "")
-
 # Gemini Live Native Audio — the active voice engine (STT + LLM + TTS in one).
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 GEMINI_MODEL = os.environ.get(
@@ -57,17 +51,10 @@ JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 ADMIN_EMAIL = os.environ["ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 
-# Restaurant bill policy. Service charge + GST are quoted by the agent and
-# displayed on every cart/order card sent to the frontend. Keep in sync with
-# the "Restaurant Policies" section of agent/brain.py.
+# Restaurant bill policy. Charges are quoted by the agent and displayed on every
+# cart/order card sent to the frontend. Keep in sync with the "Restaurant
+# Policies" section of agent/brain.py.
 #
-# Legacy flat list — kept for any external reader. The active engine is the
-# context-aware CHARGE_POLICY below (see services/billing.py).
-BILL_CHARGES: list[dict] = [
-    {"label": "Service charge (10%)", "rate": 0.10},
-    {"label": "GST (5%)", "rate": 0.05},
-]
-
 # Context-aware charge policy. Each charge declares WHEN it applies:
 #   applies_to: "all" | "dine_in" | "parcel"
 #   ac_only:    True  -> only for dine-in orders seated in an AC zone

@@ -61,12 +61,6 @@ class ServiceAreaService:
 
     # --- Admin CRUD ---
 
-    def get_area(self, area_id: str) -> ServiceArea:
-        area = self.repo.get_by_id(area_id)
-        if not area:
-            raise ValueError(f"Service area '{area_id}' not found")
-        return area
-
     def create_area(self, **kwargs) -> ServiceArea:
         return self.repo.create(**kwargs)
 

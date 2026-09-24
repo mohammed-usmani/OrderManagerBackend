@@ -36,14 +36,14 @@ def test_get_item_not_found_raises(db):
 
 
 def test_update_item_price(db):
-    item = _seed_item(db, "MS05")
+    _seed_item(db, "MS05")
     service = MenuService(db)
     updated = service.update_item("MS05", price=999.0)
     assert float(updated.price) == 999.0
 
 
 def test_disable_item(db):
-    item = _seed_item(db, "MS06")
+    _seed_item(db, "MS06")
     service = MenuService(db)
     service.disable_item("MS06")
     assert service.get_item("MS06", include_unavailable=True).available is False

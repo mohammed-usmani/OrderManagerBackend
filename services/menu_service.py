@@ -96,9 +96,6 @@ class MenuService:
         if not self.repo.update(item_id, available=False):
             raise ValueError(f"Menu item '{item_id}' not found")
 
-    def item_count(self) -> int:
-        return self.repo.count()
-
     # --- Embeddings ---
 
     def _embed_item(self, item: MenuItem) -> None:

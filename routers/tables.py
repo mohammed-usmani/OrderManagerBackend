@@ -4,7 +4,7 @@ QR-resolution endpoint the dine-in ordering app uses to bind a call to a table.
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 

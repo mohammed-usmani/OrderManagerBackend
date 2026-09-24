@@ -34,12 +34,6 @@ class TableService:
     def list_tables(self, zone_id: str | None = None, active_only: bool = False):
         return self.repo.list_all(zone_id=zone_id, active_only=active_only)
 
-    def get_table(self, table_id: str):
-        table = self.repo.get_by_id(table_id)
-        if not table:
-            raise ValueError("Table not found")
-        return table
-
     def create_table(self, **kwargs):
         zone_id = kwargs.get("zone_id")
         if not self.zone_repo.get_by_id(zone_id):

@@ -29,13 +29,10 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
-      - key: GROQ_API_KEY
+      # Gemini Live voice (Google AI Studio key).
+      - key: GOOGLE_API_KEY
         sync: false
       - key: MISTRAL_API_KEY
-        sync: false
-      - key: NVIDIA_API_KEY
-        sync: false
-      - key: VOICE_ID
         sync: false
       # Semantic menu search (mistral-embed). Optional — falls back to keyword
       # search if unset. Defaults to "mistral-embed".

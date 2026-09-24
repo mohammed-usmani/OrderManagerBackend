@@ -7,15 +7,14 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.base import get_db
 from db.models.customer import Customer
-from db.models.menu import MenuItem
-from db.models.order import Order, OrderItem
+from db.models.order import Order
 from db.models.restaurant_table import RestaurantTable
 from db.models.user import User
 from dependencies import require_admin, require_roles

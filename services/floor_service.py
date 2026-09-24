@@ -15,12 +15,6 @@ class FloorService:
     def list_floors(self, active_only: bool = False):
         return self.repo.list_all(active_only=active_only)
 
-    def get_floor(self, floor_id: str):
-        floor = self.repo.get_by_id(floor_id)
-        if not floor:
-            raise ValueError("Floor not found")
-        return floor
-
     def create_floor(self, **kwargs):
         return self.repo.create(**kwargs)
 

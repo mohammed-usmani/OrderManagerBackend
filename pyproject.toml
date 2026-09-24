@@ -5,7 +5,7 @@ description = "Voice agent system for restaurant order management"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "pipecat-ai[google,groq,mistral,silero,websocket]",
+    "pipecat-ai[google,silero,websocket]",
     "mistralai",
     "python-dotenv",
     "websockets>=13.1,<16",

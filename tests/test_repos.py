@@ -1,6 +1,3 @@
-from db.models.user import User
-from db.models.menu import MenuItem
-from db.models.order import Order
 from db.repositories.user_repo import UserRepo
 from db.repositories.menu_repo import MenuRepo
 from db.repositories.order_repo import OrderRepo

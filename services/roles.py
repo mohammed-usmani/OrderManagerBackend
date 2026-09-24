@@ -15,8 +15,6 @@ STAFF_ROLES = {OWNER, MANAGER, CASHIER, WAITER, CHEF}
 ADMIN_ROLES = {OWNER, MANAGER}
 # Roles allowed to settle / take payment.
 CASHIER_ROLES = {OWNER, MANAGER, CASHIER}
-# Roles allowed at the kitchen display.
-KITCHEN_ROLES = {OWNER, MANAGER, CHEF}
 # Roles allowed to manage staff.
 OWNER_ROLES = {OWNER, MANAGER}
 
