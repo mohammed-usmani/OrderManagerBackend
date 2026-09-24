@@ -8,6 +8,7 @@ Auxiliary REST:
 """
 
 import asyncio
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -55,14 +56,11 @@ from services.ratelimit import acquire_slot, release_slot
 
 
 def _client_ip(websocket: WebSocket) -> str:
-    """Real client IP behind Cloud Run's proxy (first X-Forwarded-For hop)."""
-    fwd = websocket.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    """Caller IP. Uvicorn resolves X-Forwarded-For only from trusted proxies
+    (see server_config), so a client can't spoof it by sending the header."""
     return websocket.client.host if websocket.client else ""
 
 
-@asynccontextmanager
 def seed_database() -> None:
     with get_session() as db:
         from db.seeds.areas_seed import seed_service_areas
@@ -75,6 +73,7 @@ def seed_database() -> None:
     logger.info("Database seeded")
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     if SEED_ON_STARTUP:
         seed_database()
@@ -376,7 +375,18 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info(f"Voice client disconnected: {ip}")
 
 
+def server_config() -> dict:
+    """Uvicorn settings. Behind a reverse proxy, set FORWARDED_ALLOW_IPS to the
+    proxy's address/range so request.client.host is the real caller (per-IP
+    rate limits depend on it); by default only a local proxy is trusted."""
+    return {
+        "host": "0.0.0.0",
+        "port": int(os.environ.get("PORT", "8000")),
+        "log_level": "info",
+        "proxy_headers": True,
+        "forwarded_allow_ips": os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
+    }
+
+
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", "8000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run("main:app", **server_config())

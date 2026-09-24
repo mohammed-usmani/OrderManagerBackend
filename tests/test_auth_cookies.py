@@ -86,13 +86,28 @@ def test_cors_only_allows_the_app_origin_with_credentials(client):
     assert "access-control-allow-origin" not in bad.headers
 
 
-def test_order_stream_needs_a_staff_session(client, db):
+@pytest.fixture
+def stream_sees_test_db(db, monkeypatch):
+    """The stream authenticates with its own short-lived session; give it the
+    test's (uncommitted) transaction."""
+    import contextlib
+
+    from routers import admin
+
+    @contextlib.contextmanager
+    def test_session():
+        yield db
+
+    monkeypatch.setattr(admin, "get_session", test_session)
+
+
+def test_order_stream_needs_a_staff_session(client, db, stream_sees_test_db):
     assert client.get("/admin/orders/stream").status_code == 401
     _login(client, db, role="none")
     assert client.get("/admin/orders/stream").status_code == 403
 
 
-def test_order_stream_rejects_a_deleted_users_token(client, db):
+def test_order_stream_rejects_a_deleted_users_token(client, db, stream_sees_test_db):
     email, _ = _user(db, role="chef")
     user = UserService(db).repo.get_by_email(email)
     token = auth_service.create_access_token(user.id, user.email, user.is_admin, user.role)
@@ -114,3 +129,33 @@ def test_login_is_rate_limited_per_ip(client, db):
 def test_voice_tickets_are_rate_limited_per_ip(client):
     codes = [client.post("/auth/ws-ticket", headers=APP_ORIGIN).status_code for _ in range(25)]
     assert codes[0] == 200 and codes[-1] == 429
+
+
+def test_order_stream_does_not_hold_a_database_session():
+    """A long-lived SSE response must not pin a pooled connection (get_db's
+    cleanup only runs when the stream ends)."""
+    from db.base import get_db as _get_db
+    from main import app
+
+    route = next(r for r in app.routes if getattr(r, "path", "") == "/admin/orders/stream")
+
+    def calls(dep):
+        yield dep.call
+        for d in dep.dependencies:
+            yield from calls(d)
+
+    assert _get_db not in set(calls(route.dependant))
+
+
+def test_lifespan_is_an_async_context_manager():
+    import main
+
+    assert hasattr(main.lifespan(main.app), "__aenter__")
+
+
+def test_proxy_headers_are_trusted_only_from_configured_proxies(monkeypatch):
+    import main
+
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "10.0.0.0/8")
+    cfg = main.server_config()
+    assert cfg["proxy_headers"] is True and cfg["forwarded_allow_ips"] == "10.0.0.0/8"

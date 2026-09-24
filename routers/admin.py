@@ -3,21 +3,23 @@
 All endpoints require an admin JWT. Customers can't reach these.
 """
 
+import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.base import get_db
+from db.base import get_db, get_session
 from db.models.customer import Customer
 from db.models.order import Order
 from db.models.restaurant_table import RestaurantTable
 from db.models.user import User
-from dependencies import require_admin, require_roles
+from dependencies import get_current_user, require_admin, require_roles
 from routers.menu import MenuItemResponse
 from services import order_lifecycle as lifecycle
 from services.billing import bill_for_order
@@ -201,14 +203,32 @@ def _serialize_order(order, db) -> AdminOrderResponse:
 
 # --- Endpoints ---
 
+def _authenticate_staff(request: Request) -> None:
+    """Check the caller is signed-in staff using a short-lived session.
+
+    Not a get_db dependency: FastAPI only runs a yield-dependency's cleanup
+    when the response finishes, which for a stream is when the tab closes, so
+    every open kitchen screen would pin a pooled connection.
+    """
+    credentials = None
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth[7:])
+    with get_session() as db:
+        user = get_current_user(request, credentials, db)
+        if user.role not in STAFF_ROLES:
+            raise HTTPException(status_code=403, detail="You don't have access to this action")
+
+
 @router.get("/orders/stream")
-async def stream_orders(user=Depends(require_roles(STAFF_ROLES))):
+async def stream_orders(request: Request):
     """Server-sent stream of order-board change events for the live KDS.
 
     Authenticated by the session cookie (EventSource sends it with
     ``withCredentials``), and the user is re-checked against the database, so a
     removed or demoted staff member loses access immediately.
     """
+    await asyncio.to_thread(_authenticate_staff, request)
 
     async def gen():
         yield "retry: 3000\n\n"  # client reconnect backoff

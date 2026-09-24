@@ -11,7 +11,8 @@ from db.repositories.customer_repo import CustomerRepo
 
 
 def _words(text: str | None) -> list[str]:
-    return re.findall(r"[a-z]+", (text or "").lower())
+    """Letters-only words, in any script (callers may be transcribed in Devanagari)."""
+    return re.findall(r"[^\W\d_]+", (text or "").lower())
 
 
 def _name_matches(on_file: str | None, said: str | None) -> bool:
@@ -22,9 +23,11 @@ def _name_matches(on_file: str | None, said: str | None) -> bool:
 
 
 def _place_matches(customer: Customer, said: str | None) -> bool:
-    """The pincode on file, or the area when the record has no pincode."""
-    if customer.pincode:
-        return re.sub(r"\D", "", said or "") == re.sub(r"\D", "", customer.pincode)
+    """The delivery pincode or the area on file. Registration fills in the
+    pincode from the area, so callers may only ever have said the area."""
+    said_digits = re.sub(r"\D", "", said or "")
+    if said_digits and customer.pincode:
+        return said_digits == re.sub(r"\D", "", customer.pincode)
     said_words = _words(said)
     return bool(said_words) and said_words == _words(customer.area)
 

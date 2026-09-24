@@ -260,3 +260,29 @@ def test_webhook_settles_a_captured_payment_off_the_event_loop(client, db, monke
 def test_webhook_rejects_a_bad_signature(client):
     r = client.post("/payments/webhook", content=b"{}", headers={"x-razorpay-signature": "nope"})
     assert r.status_code == 400
+
+
+def test_a_late_online_payment_cannot_free_a_reseated_table(db, fake_razorpay):
+    from db.models.audit_log import AuditLog
+
+    svc, table, zone, r1 = _table_session(db)
+    sid = r1.table_session_id
+    pay = PaymentService(db)
+    checkout = pay.create_checkout(session_id=sid)    # guest opens Razorpay…
+    pay.settle_cash(session_id=sid)                   # …but the cashier settles cash first
+    table.status = "occupied"                         # next party is seated
+    db.flush()
+
+    late = pay.confirm_razorpay(provider_order_id=checkout["provider_order_id"],
+                                razorpay_payment_id="pay_late", signature="sig")
+    db.refresh(table)
+    assert table.status == "occupied"
+    audit = db.query(AuditLog).filter(AuditLog.entity_id == late.id).one()
+    assert audit.meta["overpaid"] is True
+
+
+def test_a_round_paid_on_its_own_is_not_billed_again_at_the_table(db):
+    svc, table, zone, r1 = _table_session(db)
+    r2 = _fire_round(db, svc, table, zone)
+    PaymentService(db).settle_cash(order_id=r1.id)  # "take payment" on one round
+    assert PaymentService(db).amount_due(session_id=r1.table_session_id) == float(r2.total)

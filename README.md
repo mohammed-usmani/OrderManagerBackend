@@ -150,6 +150,7 @@ On startup the server seeds the menu (only into an empty table; afterwards it ju
 | `RAZORPAY_KEY_ID` · `RAZORPAY_KEY_SECRET` · `RAZORPAY_WEBHOOK_SECRET` | · | cash-only when unset |
 | `CLOUDINARY_URL` | · | menu photo uploads; admins paste image URLs without it |
 | `PORT` | · | `8000` (`8080` in the container) |
+| `FORWARDED_ALLOW_IPS` | ✓ behind a proxy | proxy address/range whose `X-Forwarded-For` is trusted (default `127.0.0.1`). Without it every caller looks like the proxy and the per-IP rate limits become global |
 | `RUN_MIGRATIONS` | · | container only; `false` skips `alembic upgrade head` on boot |
 
 ---

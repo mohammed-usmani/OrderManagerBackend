@@ -64,13 +64,27 @@ class PaymentService:
 
     def _billed(self, order_id, session_id) -> Decimal:
         if session_id:
+            # Rounds already paid on their own (by order) aren't owed again at the table.
             orders = OrderRepo(self.db).list_for_table_session(session_id)
+            skip = _UNBILLED | {"paid"}
         else:
             orders = [OrderRepo(self.db).get_by_id(order_id)]
+            skip = _UNBILLED
         return sum(
-            (to_money(bill_for_order(o)["total"]) for o in orders if o.status not in _UNBILLED),
+            (to_money(bill_for_order(o)["total"]) for o in orders if o.status not in skip),
             Decimal(0),
         )
+
+    def _still_open(self, pay: Payment) -> bool:
+        """Lock the payment's target and report whether it can still be closed.
+        A late online payment can land after the table was settled another way
+        (and a new party seated): it must not close anything again."""
+        if pay.table_session_id:
+            sess = (self.db.query(TableSession).filter(TableSession.id == pay.table_session_id)
+                    .with_for_update().first())
+            return sess is not None and sess.status != "closed"
+        order = self.db.query(Order).filter(Order.id == pay.order_id).with_for_update().first()
+        return order is not None and order.status not in ("paid", "cancelled")
 
     def _covered(self, order_id, session_id) -> Decimal:
         """Bill amount already covered by paid payments (tips aside, discounts included)."""
@@ -161,7 +175,12 @@ class PaymentService:
     def _finalize(self, pay: Payment, actor) -> None:
         # Close the target only once this payment leaves nothing owed. A stale
         # checkout (rounds added after it opened) stays a partial payment.
-        fully_paid = self._due(pay.order_id, pay.table_session_id) < _SETTLED
+        open_target = self._still_open(pay)
+        due = self._due(pay.order_id, pay.table_session_id)
+        fully_paid = open_target and due < _SETTLED
+        # Money received for a target that was already paid or closed: keep the
+        # record (it was captured) and flag it for a refund in the audit log.
+        overpaid = not open_target or due <= -_SETTLED
         if pay.table_session_id and fully_paid:
             settled = self.orders.settle_table_session(pay.table_session_id)
             for o in settled:
@@ -185,6 +204,7 @@ class PaymentService:
             entity_id=pay.id,
             meta={"method": pay.method, "amount": float(pay.amount),
                   "discount": float(pay.discount_amount), "discount_reason": pay.discount_reason,
+                  "overpaid": overpaid,
                   "order_id": pay.order_id, "table_session_id": pay.table_session_id},
         )
         self.db.flush()

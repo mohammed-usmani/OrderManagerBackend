@@ -134,3 +134,14 @@ def test_dine_in_needs_the_table_qr(db, monkeypatch):
     names = {f.__name__ for f in voice_pipeline._make_tool_wrappers(session, "Asia/Kolkata")}
     assert "pc_request_bill" in names  # it is the dine-in tool set
     assert "pc_set_table" not in names  # no binding to a table by saying its number
+
+
+def test_verify_accepts_the_area_even_when_a_pincode_is_on_file(db):
+    c = _customer(db)  # area "Bandra West", pincode 400050 (auto-filled at registration)
+    assert CustomerService(db).verify(c.phone, name="Priya", place="Bandra West") == c
+    assert CustomerService(db).verify(c.phone, name="Priya", place="Andheri") is None
+
+
+def test_verify_matches_names_in_devanagari(db):
+    c = _customer(db, name="प्रिया शर्मा")
+    assert CustomerService(db).verify(c.phone, name="प्रिया", place="400050") == c
