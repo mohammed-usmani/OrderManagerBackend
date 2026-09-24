@@ -21,6 +21,7 @@ class CallSession:
     customer_id: str | None = None
     customer_code: str | None = None
     customer_name: str | None = None
+    failed_lookups: int = 0  # lookups are refused for the rest of the call after 3
 
     # --- Dine-in: set when the call is bound to a table (QR or voice fallback) ---
     table_id: str | None = None

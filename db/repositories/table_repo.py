@@ -19,14 +19,6 @@ class TableRepo:
             .first()
         )
 
-    def get_by_label(self, label: str) -> RestaurantTable | None:
-        """Voice fallback: match a spoken/typed table label (case-insensitive)."""
-        return (
-            self.db.query(RestaurantTable)
-            .filter(RestaurantTable.label.ilike(label.strip()))
-            .first()
-        )
-
     def list_all(
         self, zone_id: str | None = None, active_only: bool = False
     ) -> list[RestaurantTable]:

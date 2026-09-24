@@ -10,6 +10,25 @@ from db.models.customer import Customer
 from db.repositories.customer_repo import CustomerRepo
 
 
+def _words(text: str | None) -> list[str]:
+    return re.findall(r"[a-z]+", (text or "").lower())
+
+
+def _name_matches(on_file: str | None, said: str | None) -> bool:
+    """Every word the caller said is part of the name on file ("Priya" matches
+    "Priya Sharma")."""
+    said_words, file_words = set(_words(said)), set(_words(on_file))
+    return bool(said_words) and said_words <= file_words
+
+
+def _place_matches(customer: Customer, said: str | None) -> bool:
+    """The pincode on file, or the area when the record has no pincode."""
+    if customer.pincode:
+        return re.sub(r"\D", "", said or "") == re.sub(r"\D", "", customer.pincode)
+    said_words = _words(said)
+    return bool(said_words) and said_words == _words(customer.area)
+
+
 def normalize_phone(raw: str | None) -> str | None:
     """Reduce a spoken/typed phone to comparable digits.
 
@@ -51,6 +70,15 @@ class CustomerService:
         if not customer:
             raise ValueError(f"Customer '{customer_id}' not found")
         return customer
+
+    def verify(self, code_or_phone: str, *, name: str, place: str) -> Customer | None:
+        """A returning customer, only if the caller also knows the name and the
+        delivery pincode (or, when none is on file, the area) on the record.
+        A code or phone number alone is guessable, so it never identifies."""
+        cust = self.lookup(code_or_phone)
+        if cust and _name_matches(cust.name, name) and _place_matches(cust, place):
+            return cust
+        return None
 
     def lookup(self, code_or_phone: str) -> Customer | None:
         """Resolve a returning customer by their 4-digit code or phone number."""

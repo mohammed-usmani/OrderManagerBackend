@@ -69,6 +69,22 @@ def customer_to_card(customer) -> dict:
     }
 
 
+def verified_customer_card(customer) -> dict:
+    """Card shown when a returning caller is verified by voice: enough to greet
+    them, without putting their street address, phone or health details on
+    whatever screen the call is coming from."""
+    card = customer_to_card(customer)
+    phone = customer.phone or ""
+    card.update(
+        phone=f"•••• {phone[-4:]}" if phone else None,
+        address_line=None,
+        landmark=None,
+        preferences=None,
+        allergies=None,
+    )
+    return card
+
+
 def order_item_to_card(item, menu_repo) -> dict:
     """OrderItem ORM → UI line item."""
     menu_item = menu_repo.get_by_id(item.menu_item_id)

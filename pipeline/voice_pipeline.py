@@ -52,10 +52,11 @@ from pipeline.ui_events import (
     menu_item_to_card,
     order_to_card,
     push_ui_event,
+    verified_customer_card,
 )
 from loguru import logger
 
-from services.customer_service import CustomerService
+from services.customer_service import CustomerService, normalize_phone
 from services.menu_service import MenuService
 from services.order_service import OrderService
 from services.service_area_service import ServiceAreaService
@@ -71,6 +72,9 @@ _NEED_CUSTOMER = (
     "register_customer). Do not build an order until a customer is identified."
 )
 
+
+# Wrong code/phone + name + pincode combinations allowed per call before lookups stop.
+MAX_FAILED_LOOKUPS = 3
 
 def _resolve_tz(name: str | None) -> ZoneInfo:
     if name:
@@ -125,8 +129,9 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         """Why an order tool refused — depends on the call mode."""
         if session.is_dine_in:
             return (
-                "I don't know which table this is yet. Ask the guest for their "
-                "table number or the code on the QR card, then call set_table."
+                "This call isn't linked to a table. Ask the guest to scan the QR "
+                "code on their table to order — you can't take a dine-in order "
+                "without it."
             )
         return _NEED_CUSTOMER
 
@@ -291,52 +296,67 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
     # --- Customer identity tools -----------------------------------------
 
     async def pc_lookup_customer(
-        params: FunctionCallParams, code_or_phone: str
+        params: FunctionCallParams, code_or_phone: str, name: str, pincode_or_area: str
     ) -> None:
-        """Look up a RETURNING customer by their 4-digit code or phone number.
+        """Look up a RETURNING customer. They must prove it's their account:
+        besides their 4-digit code or phone number, ask for the NAME on the
+        account and their delivery PINCODE (or area). All three must match.
 
-        On a match, the rest of the call is tied to that customer and you get
-        back their name, delivery address, preferences and allergies — greet
-        them by name and confirm the address on file before ordering. On no
-        match, offer to register them as a new customer.
+        On success the rest of the call is tied to that customer. On failure,
+        don't say whether the number or code exists — ask them to double-check,
+        or offer to register them as a new customer.
 
         Args:
             code_or_phone: The 4-digit code they quote (e.g. "4821") or their
                 phone number.
+            name: The name on the account, as the caller says it.
+            pincode_or_area: Their delivery pincode (or area if they don't know it).
         """
-        stop = _loop_guard("pc_lookup_customer", code_or_phone)
+        if session.failed_lookups >= MAX_FAILED_LOOKUPS:
+            await params.result_callback(
+                "Too many unsuccessful attempts — you can't look up an account on "
+                "this call any more. Apologise, and offer to register them as a new "
+                "customer or suggest calling back."
+            )
+            return
+        if not (name or "").strip() or not (pincode_or_area or "").strip():
+            await params.result_callback(
+                "Before pulling up their account, ask for the name on the account "
+                "and their delivery pincode (or area). Then call this again with all three."
+            )
+            return
+        stop = _loop_guard("pc_lookup_customer", f"{code_or_phone}|{name}|{pincode_or_area}")
         if stop:
             await params.result_callback(stop)
             return
 
         with get_session() as db:
-            cust = CustomerService(db).lookup(code_or_phone)
+            cust = CustomerService(db).verify(code_or_phone, name=name, place=pincode_or_area)
             if not cust:
+                session.failed_lookups += 1
                 await params.result_callback(
-                    f"No customer found for '{code_or_phone}'. Ask if they'd like "
-                    "to register as new — collect name, phone, and full address."
+                    "Those details don't match an account. Don't say whether the "
+                    "number or code exists. Ask them to check the details, or offer "
+                    "to register them as a new customer."
                 )
                 return
             session.identify(cust)
-            card = customer_to_card(cust)
+            card = verified_customer_card(cust)
+            first_name = (cust.name or "").split()[0] if cust.name else "there"
+            area, preferences, allergies = cust.area, cust.preferences, cust.allergies
 
         await push_ui_event(params.llm, "customer_card", card)
-        bits = [f"Welcome back {card['name'] or 'customer'} (code {card['code']})."]
-        if card["address_line"]:
-            addr = card["address_line"]
-            if card["area"]:
-                addr += f", {card['area']}"
-            if card["pincode"]:
-                addr += f" {card['pincode']}"
-            bits.append(f"Address on file: {addr}.")
-        if card["preferences"]:
-            bits.append(f"Preferences: {card['preferences']}.")
-        if card["allergies"]:
-            bits.append(f"Avoid (allergies): {card['allergies']}.")
-        bits.append(
-            "Greet them by name, confirm delivery to the address on file "
-            "(or ask if it changed), then take their order."
-        )
+        bits = [f"Verified: {first_name} (code {card['code']})."]
+        if area:
+            bits.append(
+                f"They usually get delivery in {area}. Ask if that's where it's going "
+                "today — never read out their street address or phone number."
+            )
+        if preferences:
+            bits.append(f"For you, don't read aloud — preferences: {preferences}.")
+        if allergies:
+            bits.append(f"For you, don't read aloud — must avoid (allergies): {allergies}.")
+        bits.append("Greet them by first name, then take their order.")
         await params.result_callback(" ".join(bits))
 
     async def pc_register_customer(
@@ -383,6 +403,14 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
             return
 
         with get_session() as db:
+            existing_phone = normalize_phone(phone)
+            if existing_phone and CustomerRepo(db).get_by_phone(existing_phone):
+                await params.result_callback(
+                    "That phone number is already registered. Don't reveal anything "
+                    "about that account — ask for their 4-digit code or look them up "
+                    "with lookup_customer (name and delivery pincode needed)."
+                )
+                return
             ok, matched = ServiceAreaService(db).is_serviceable(pincode or area)
             matched_name = matched.name if matched else None
             matched_pincode = matched.pincode if matched else None
@@ -475,7 +503,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
         with get_session() as db:
             cust = CustomerService(db).update_customer(session.customer_id, **fields)
             session.identify(cust)
-            card = customer_to_card(cust)
+            card = verified_customer_card(cust)
 
         await push_ui_event(params.llm, "customer_card", card)
         await params.result_callback(
@@ -786,56 +814,6 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
 
     # --- Dine-in tools ----------------------------------------------------
 
-    async def pc_set_table(params: FunctionCallParams, table: str) -> None:
-        """Bind this dine-in call to a table by its number (voice fallback).
-
-        Only needed when the guest did NOT scan the table's QR — ask them for
-        their table number (or the number printed on the QR tent card) and pass
-        it here. Once set, you can take their order.
-
-        Args:
-            table: The table number/label the guest gives (e.g. "5", "table 7").
-        """
-        stop = _loop_guard("pc_set_table", table)
-        if stop:
-            await params.result_callback(stop)
-            return
-
-        raw = table.strip()
-        cand = raw[5:].strip() if raw.lower().startswith("table") else raw
-        with get_session() as db:
-            from db.repositories.floor_repo import FloorRepo
-            from db.repositories.table_repo import TableRepo
-            from db.repositories.zone_repo import ZoneRepo
-
-            trepo = TableRepo(db)
-            t = (
-                trepo.get_by_qr_token(raw)
-                or trepo.get_by_label(cand)
-                or trepo.get_by_label(raw)
-            )
-            if not t or not t.active:
-                await params.result_callback(
-                    f"No table '{table}' found here. Ask the guest to read the "
-                    "number on their table again, slowly."
-                )
-                return
-            zone = ZoneRepo(db).get_by_id(t.zone_id)
-            floor = FloorRepo(db).get_by_id(zone.floor_id) if zone and zone.floor_id else None
-            label = t.label
-            zone_name = zone.name if zone else None
-            is_ac = bool(zone.is_ac) if zone else False
-            floor_name = floor.name if floor else None
-            session.seat(
-                table_id=t.id, table_label=label, zone_name=zone_name,
-                is_ac=is_ac, floor_name=floor_name,
-            )
-
-        await params.result_callback(
-            f"Got it — Table {label} in {zone_name or 'the dining room'}. "
-            "You can take their order now."
-        )
-
     async def pc_request_bill(params: FunctionCallParams) -> None:
         """Signal staff to bring the bill and settle the table.
 
@@ -991,7 +969,7 @@ def _make_tool_wrappers(session: CallSession, user_timezone: str | None = None):
 
     if session.is_dine_in:
         # Dine-in: no customer identification or delivery; seat + bill instead.
-        return shared_menu + [pc_set_table] + shared_cart + [pc_request_bill] + tail
+        return shared_menu + shared_cart + [pc_request_bill] + tail
 
     # Parcel (default): customer identity + delivery-area + order history.
     return (
@@ -1045,7 +1023,7 @@ def create_pipeline(
     session = CallSession()
     if table_token:
         # Dine-in: bind to the scanned table. Stay in dine-in mode even if the
-        # token doesn't resolve — the agent will ask for the table via set_table.
+        # token doesn't resolve — the agent asks the guest to scan the QR again.
         session.order_type = OrderType.DINE_IN
         try:
             with get_session() as db:
@@ -1062,7 +1040,7 @@ def create_pipeline(
                 f"AC={info['is_ac']})"
             )
         except ValueError:
-            logger.warning("Dine-in table_token didn't resolve — agent will ask for the table")
+            logger.warning("Dine-in table_token didn't resolve — agent will ask for a QR scan")
 
     # Load the editable restaurant profile so "are we open" tracks admin hours.
     _profile_hours, _profile_tz = None, None
