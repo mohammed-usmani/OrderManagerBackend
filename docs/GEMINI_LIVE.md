@@ -1,9 +1,9 @@
-# Gemini Live Native Audio (feature branch)
+# Gemini Live Native Audio
 
-This branch swaps the voice stack from **Voxtral STT + Mistral/Groq LLM +
-Voxtral TTS** to a single **Google Gemini Live Native Audio** service. Gemini
-handles speech-to-text, LLM reasoning, and text-to-speech inside one
-WebSocket session.
+The voice agent runs on a single **Google Gemini Live Native Audio** service.
+It replaced the original **Voxtral STT + Mistral/Groq LLM + Voxtral TTS**
+stack: Gemini handles speech understanding, reasoning and speech output
+inside one WebSocket session.
 
 ## Why
 
@@ -20,7 +20,7 @@ WebSocket session.
    GOOGLE_API_KEY=...
 
    # Optional overrides — defaults shown.
-   GEMINI_MODEL=models/gemini-2.5-flash-native-audio-preview-12-2025
+   GEMINI_MODEL=models/gemini-3.1-flash-live-preview
    GEMINI_VOICE=Charon
    ```
 
@@ -28,8 +28,8 @@ WebSocket session.
 
 ## What's different in the pipeline
 
-- `VoxtralSTTService`, `FallbackLLMService`, `VoxtralTTSService` are
-  *unused* on this branch (files still exist for easy revert).
+- `VoxtralSTTService`, `FallbackLLMService`, `VoxtralTTSService` are no
+  longer imported (`pipeline/voxtral_*.py`, `pipeline/fallback_llm.py`).
 - `GeminiLiveLLMService(api_key=..., tools=..., settings=...)` replaces all
   three.
 - Output audio is **24 kHz mono PCM16** (same as before, so the browser
@@ -39,17 +39,19 @@ WebSocket session.
 
 ## Things to watch
 
-- Model is still in **preview** (Dec 2025). Expect breaking changes on
+- The default model is a **preview** model. Expect breaking changes on
   Google's side.
 - Free-tier session length caps at ~15 minutes. Long sessions need
   `SessionResumptionConfig` (the service supports it; we haven't wired it
   up yet).
-- Quotas: ~3 concurrent free / ~50 concurrent Tier-1.
+- Quotas: ~3 concurrent free / ~50 concurrent Tier-1. The server enforces
+  this with `MAX_CONCURRENT_CALLS` (default 3) and caps each call at
+  `MAX_SESSION_SECONDS` (default 900).
 
-## Rollback
+## Going back to Voxtral + Mistral/Groq
 
-```bash
-git checkout main
-```
-
-All Voxtral + Mistral/Groq code is intact on `main`.
+The old services are still in `pipeline/`. Swap `GeminiLiveLLMService` in
+`pipeline/voice_pipeline.py` for `VoxtralSTTService → FallbackLLMService →
+VoxtralTTSService`, and set `MISTRAL_API_KEY`, `GROQ_API_KEY` and `VOICE_ID`.
+`git show 980a54c^:pipeline/voice_pipeline.py` has the last version with that
+pipeline wired in (`980a54c` is the switch to Gemini Live).

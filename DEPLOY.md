@@ -136,7 +136,8 @@ you'll get a URL like `https://saffron-smoke-api-xxxxx.asia-south1.run.app`.
 
 ### Migrations
 The container runs `alembic upgrade head` on boot (creates tables + the pgvector
-extension + seeds the menu/areas/admin). Nothing extra to do. To run migrations
+extension); the app then seeds the menu, admin, service areas and floor on first
+start. Nothing extra to do. To run migrations
 separately instead, deploy with `--set-env-vars RUN_MIGRATIONS=false` and run
 them yourself against `DATABASE_URL`.
 

@@ -1,6 +1,6 @@
 # Saffron & Smoke — Server
 
-Voice-first restaurant ordering backend. One WebSocket carries audio + structured UI events between a customer and **Arjun**, the in-house AI manager. REST endpoints cover auth, menu, orders, and the admin back-office.
+Backend for a voice-first Indian restaurant. Guests talk to **Arjun**, the AI host, over one WebSocket that carries audio both ways plus structured UI events; staff run the restaurant from a role-based back-office (kitchen display, floor and tables, billing, menu, analytics).
 
 > Companion frontend lives in `../client/`.
 
@@ -8,10 +8,42 @@ Voice-first restaurant ordering backend. One WebSocket carries audio + structure
 
 ## What it does
 
-- **Voice pipeline** (Pipecat): STT → LLM (with restaurant tools) → TTS → back over the same WebSocket.
-- **Tool-calling agent** places/reads orders, searches the menu, renders cards on the customer's screen, and ends the call when done.
-- **Structured UI events** (`menu_results`, `cart_view`, `orders_list`, `order_confirmed`, `session_end`) travel over the same WS so the frontend renders a live "canvas" while you talk.
-- **REST** for user registration / login (JWT), menu read/CRUD, order read/cancel, and an admin surface (`/admin/*`) for kitchen fulfilment, analytics, and menu management.
+- **Voice ordering** — a Pipecat pipeline around **Gemini Live native audio**: the caller's speech goes straight into one realtime model that listens, calls restaurant tools, and answers in speech. No separate STT or TTS.
+- **Two call modes**
+  - **Parcel** (takeaway/delivery): looks up or registers the customer by a 4-digit code or phone number, checks the delivery area, takes the order.
+  - **Dine-in**: the guest scans the table's QR code, so the call is already bound to that table; they can order and ask for the bill.
+- **Live UI canvas** — tools push `ui_event` frames over the same socket (menu results, cart, customer card, delivery check, order confirmation, bill, order history) so the screen follows the conversation.
+- **Back-office** — role-based access for owner, manager, cashier, waiter and chef: a real-time kitchen feed (Redis pub/sub → SSE), order edits/voids/refunds, table transfer and merge, floors/zones/tables with QR codes, 86-ing dishes, customers, staff, restaurant profile, charge policy and analytics.
+- **Billing & payments** — context-aware charges (service, AC for dine-in AC zones, GST split into CGST/SGST), cash settlement, and Razorpay checkout (test mode) including pay-from-phone for dine-in tabs.
+
+---
+
+## Architecture
+
+```
+ Browser (Next.js client)                           Server (FastAPI)
+ ────────────────────────                           ─────────────────────────────────────────
+ POST /auth/ws-ticket ───────────────────────────▶  30 s single-use ticket in Redis
+ WS /ws?ticket=…  ◀── audio (16 kHz in / 24 kHz out) + ui_event JSON ──▶
+                                                    Pipecat pipeline
+                                                      transport.input()
+                                                      → user context aggregator (Silero VAD)
+                                                      → GeminiLiveLLMService  ⇄ tools → services → Postgres
+                                                      → transport.output()
+                                                      → assistant context aggregator
+ Admin pages ── REST (JWT) ─────────────────────▶  routers → services → repositories → models
+ Kitchen display ── SSE /admin/orders/stream ◀───  Redis pub/sub "orders:events"
+```
+
+**Voice call lifecycle** (`main.py`, `/ws`)
+
+1. The client gets a ticket from `POST /auth/ws-ticket` (no login needed — the voice line is anonymous). The ticket carries the caller's timezone and, for dine-in, the table's QR token.
+2. `/ws` consumes the ticket (Redis `GETDEL`), then takes one of `MAX_CONCURRENT_CALLS` global slots (a Redis sorted set). When all lines are busy it closes with code `4003` and the client retries.
+3. The pipeline starts with a fresh system prompt: the restaurant's current time, opening hours and the caller's mode (parcel or dine-in table).
+4. A watchdog ends the call after `MAX_SESSION_SECONDS`, warning the client 60 s before (`time_warning`, then `session_end`).
+5. When the caller hangs up, the disconnect handler cancels the pipeline so the slot is freed immediately.
+
+**Layer rule:** `router → service → repository → model`. Services own business rules, routers only translate HTTP, and the voice agent's tools call services directly — they're just another front-end.
 
 ---
 
@@ -21,15 +53,14 @@ Voice-first restaurant ordering backend. One WebSocket carries audio + structure
 |---|---|
 | Language | Python 3.11 |
 | HTTP | FastAPI + Uvicorn |
-| Voice pipeline | [Pipecat](https://github.com/pipecat-ai/pipecat) |
-| LLM | Mistral Large (primary) · Groq Llama 3.3 (fallback on rate limits) |
-| STT / TTS | Voxtral (Mistral) |
-| Database | PostgreSQL + SQLAlchemy 2 + Alembic |
-| WS auth tickets | Redis (30 s single-use) |
-| Auth | bcrypt + JWT (python-jose) |
+| Voice | [Pipecat](https://github.com/pipecat-ai/pipecat) + **Gemini Live native audio** (`gemini-3.1-flash-live-preview`, voice Charon) · Silero VAD |
+| Database | PostgreSQL + **pgvector** · SQLAlchemy 2 · Alembic |
+| Menu search | Mistral `mistral-embed` embeddings (semantic), falling back to keyword search |
+| Realtime | Redis — WS tickets, call slots, JWT deny-list, order-event pub/sub |
+| Auth | bcrypt + JWT (python-jose), roles: owner · manager · cashier · waiter · chef |
+| Payments | Razorpay (test mode) + cash |
+| Images | Cloudinary (optional) |
 | Package mgmt | [uv](https://docs.astral.sh/uv/) |
-
-Alternative voice backend on the `feat/gemini-live-native-audio` branch: single **Gemini Live Native Audio** service replacing STT + LLM + TTS — see `docs/GEMINI_LIVE.md`.
 
 ---
 
@@ -37,166 +68,172 @@ Alternative voice backend on the `feat/gemini-live-native-audio` branch: single 
 
 ```
 server/
-├── main.py                   FastAPI entrypoint + /ws voice endpoint
-├── config.py                 env loading + shared constants (BILL_CHARGES…)
-├── dependencies.py           get_current_user / require_admin
+├── main.py                   FastAPI app, lifespan seeding, /health, /ws voice endpoint
+├── config.py                 env loading + defaults (CHARGE_POLICY, call limits, …)
+├── dependencies.py           current user, admin/staff/cashier guards
 │
 ├── agent/
-│   ├── brain.py              SYSTEM_PROMPT + build_time_context_message()
-│   └── restaurant/menu.py    seed MENU + IMAGE_URLS
+│   ├── brain.py              system prompt + time-context message
+│   ├── session_state.py      per-call state (mode, table, customer, cart)
+│   └── restaurant/menu.py    seed menu + image URLs
 │
 ├── pipeline/
-│   ├── voice_pipeline.py     Pipecat pipeline factory + tool wrappers
-│   ├── ui_events.py          push_ui_event helper + compute_bill
-│   ├── fallback_llm.py       Mistral → Groq fallback LLM service
-│   ├── voxtral_stt.py        Mistral Voxtral STT adapter
-│   └── voxtral_tts.py        Mistral Voxtral TTS adapter
+│   ├── voice_pipeline.py     Pipecat pipeline factory + the agent's tools
+│   └── ui_events.py          push_ui_event helper
 │
-├── routers/
-│   ├── auth.py               /auth/register, /auth/login, /auth/ws-ticket
-│   ├── menu.py               /menu (public read + admin CRUD)
-│   ├── orders.py             /orders (read + cancel + tap-to-add)
-│   └── admin.py              /admin/orders, /admin/menu, /admin/analytics
-│
-├── services/                 business logic (no HTTP concerns)
-│   ├── auth_service.py       JWT + Redis tickets
-│   ├── menu_service.py       menu search + filter + CRUD
-│   ├── order_service.py      cart + order state machine
-│   ├── chat_service.py       chat session persistence
-│   └── user_service.py       register / login
-│
+├── routers/                  auth, menu, orders, admin, analytics, customers,
+│                             floors, zones, tables, table_sessions, service_areas,
+│                             settings, staff, payments
+├── services/                 business logic — orders & lifecycle, billing, payments,
+│                             tables & floors, events (pub/sub), embeddings, roles,
+│                             ratelimit, audit, settings, …
 ├── db/
-│   ├── base.py               engine + Session factory + get_session()
-│   ├── models/               User, MenuItem, Order, OrderItem, ChatSession,
-│   │                         ChatMessage (SQLAlchemy 2 mapped classes)
-│   ├── repositories/         thin query helpers per model
-│   └── seeds/menu_seed.py    seeds menu + admin user on startup
+│   ├── models/               users, menu, orders, customers, floors, dining zones,
+│   │                         tables, table sessions, service areas, payments,
+│   │                         audit log, app settings, chat
+│   ├── repositories/         thin query helpers
+│   └── seeds/                menu, admin, service areas, floor (+ manual demo seed)
 │
 ├── migrations/               Alembic
-├── scripts/                  one-shot helpers (e.g. image downloader)
-├── tests/                    pytest, hits a real test database
-└── docs/                     design notes (GEMINI_LIVE.md, etc.)
+├── tests/                    pytest against a real Postgres test database
+├── docs/GEMINI_LIVE.md       notes on the Gemini Live voice engine
+├── Dockerfile · docker-entrypoint.sh · docker-compose.yml
+└── deploy.sh · DEPLOY.md     Cloud Run deployment
 ```
 
-### Layer rule
-
-`router → service → repository → model`. Services own business rules. Routers do translation only. Agent tools call services directly (they're just another front-end).
+`pipeline/fallback_llm.py`, `voxtral_stt.py`, `voxtral_tts.py` and `text_input.py` are from the earlier Mistral/Voxtral voice stack and are no longer imported.
 
 ---
 
-## Prerequisites
+## Getting started
 
-- Python 3.11
-- PostgreSQL (local or Docker)
-- Redis
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- API keys: Mistral, Groq, NVIDIA NIM, a Voxtral `VOICE_ID`
-- Optional (for the Gemini branch): Google AI Studio API key
+**Prerequisites:** Python 3.11, [uv](https://docs.astral.sh/uv/getting-started/installation/), PostgreSQL with the `vector` extension, Redis, and a [Google AI Studio](https://aistudio.google.com/) key.
 
----
-
-## Setup
+The quickest way to get Postgres (with pgvector) and Redis is Docker:
 
 ```bash
-# 1. Install deps
+docker compose up -d db redis        # Postgres on :5433, Redis on :6380
+```
+
+Then:
+
+```bash
 uv sync
-
-# 2. Create the database
-createdb restaurant
-
-# 3. Copy env template and fill in keys
-cp .env.example .env
-$EDITOR .env
-
-# 4. Run migrations
+cp .env.example .env                 # fill in keys; point DATABASE_URL/REDIS_URL at the ports above
 uv run alembic upgrade head
-
-# 5. Start the server
 uv run uvicorn main:app --reload --port 8000
 ```
 
-First startup seeds the menu and creates the admin user (`ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env`). Menu image URLs are also synced from `agent/restaurant/menu.py` on every restart.
+Or run everything, API included: `docker compose up` (migrations run on boot).
+
+On startup the server seeds the menu (only into an empty table; afterwards it just syncs image URLs), the admin user (`ADMIN_EMAIL` / `ADMIN_PASSWORD`), service areas and a default floor, loads settings into cache, and embeds any menu items that are missing vectors. `python -m db.seeds.demo_seed` adds demo data on request.
 
 ---
 
 ## Environment variables
 
-| Name | Required | Notes |
+| Name | Required | Default / notes |
 |---|:---:|---|
-| `GROQ_API_KEY` | ✓ | Fallback LLM + voice-pipeline fallback |
-| `MISTRAL_API_KEY` | ✓ | Primary LLM + STT + TTS |
-| `NVIDIA_API_KEY` | ✓ | Reserved for secondary fallback |
-| `VOICE_ID` | ✓ | Mistral Voxtral voice uuid |
-| `DATABASE_URL` | ✓ | e.g. `postgresql://user:pass@localhost/restaurant` |
-| `REDIS_URL` | · | defaults to `redis://localhost:6379` |
-| `JWT_SECRET_KEY` | ✓ | 32+ random chars |
-| `JWT_EXPIRE_DAYS` | · | defaults to `7` |
-| `ADMIN_EMAIL` · `ADMIN_PASSWORD` | ✓ | seeded on first run |
-| `GOOGLE_API_KEY` | · | only on the Gemini Live branch |
-| `GEMINI_MODEL` · `GEMINI_VOICE` | · | override Gemini model / voice |
+| `DATABASE_URL` | ✓ | e.g. `postgresql://user:pass@localhost:5433/restaurant` |
+| `JWT_SECRET_KEY` | ✓ | 32+ random characters |
+| `ADMIN_EMAIL` · `ADMIN_PASSWORD` | ✓ | seeded owner account |
+| `GOOGLE_API_KEY` | ✓ for voice | Google AI Studio key for Gemini Live |
+| `GEMINI_MODEL` · `GEMINI_VOICE` | · | `models/gemini-3.1-flash-live-preview` · `Charon` |
+| `REDIS_URL` | · | `redis://localhost:6379` |
+| `JWT_EXPIRE_DAYS` | · | `7` |
+| `MAX_CONCURRENT_CALLS` | · | `3` (Gemini free tier allows about 3 live sessions) |
+| `MAX_SESSION_SECONDS` | · | `900` |
+| `MISTRAL_API_KEY` | · | semantic menu search; keyword search without it |
+| `MISTRAL_EMBED_MODEL` · `EMBEDDING_DIM` | · | `mistral-embed` · `1024` |
+| `RAZORPAY_KEY_ID` · `RAZORPAY_KEY_SECRET` · `RAZORPAY_WEBHOOK_SECRET` | · | cash-only when unset |
+| `CLOUDINARY_URL` | · | menu photo uploads; admins paste image URLs without it |
+| `PORT` | · | `8000` (`8080` in the container) |
+| `RUN_MIGRATIONS` | · | container only; `false` skips `alembic upgrade head` on boot |
 
 ---
 
-## Key endpoints
+## API overview
 
-| Method | Path | Purpose |
+Full OpenAPI docs at `http://localhost:8000/docs`. Access levels: **public**, **user** (any login), **staff** (any staff role), **cashier** (owner/manager/cashier), **admin** (owner/manager).
+
+| Prefix | What | Access |
 |---|---|---|
-| `POST` | `/auth/register` · `/auth/login` | returns JWT |
-| `POST` | `/auth/ws-ticket` | single-use Redis ticket (carries user timezone) |
-| `WS` | `/ws?ticket=…` | voice pipeline — audio in + audio/UI events out |
-| `GET` | `/menu` · `/menu/{id}` | public catalog |
-| `POST` / `PATCH` / `DELETE` | `/menu` · `/menu/{id}` | admin CRUD |
-| `GET` | `/orders` · `/orders/current` · `/orders/{id}` | customer orders |
-| `POST` | `/orders/current/items` | tap-to-add fallback (no voice) |
-| `DELETE` | `/orders/current/items/{id}` | tap-to-remove |
-| `DELETE` | `/orders/{id}` | cancel |
-| `GET` | `/admin/orders?status=active\|all\|…` | kitchen feed |
-| `PATCH` | `/admin/orders/{id}/status` | transition `paid` / `cancelled` |
-| `GET` | `/admin/menu` | full catalog incl. disabled |
-| `GET` | `/admin/analytics/summary?range=today\|7d\|30d\|all` | dashboard data |
-
-Full OpenAPI docs at `http://localhost:8000/docs`.
-
----
-
-## Tool catalogue (voice agent)
-
-Each tool is a Pipecat "direct function" registered on the LLM. Every tool that touches UI pushes a `ui_event` frame in addition to returning a short text summary for the LLM to narrate.
-
-| Tool | UI event | What it does |
-|---|---|---|
-| `search_menu` | `menu_results` | smart keyword search (name, category, dietary, spice) |
-| `filter_menu` | `menu_results` | AND-composable filter |
-| `get_menu_categories` | `menu_results` | full catalog |
-| `add_to_order` · `remove_from_order` | `cart_view` | cart mutations |
-| `view_order` | `cart_view` | current cart |
-| `confirm_order` | `order_confirmed` | send to kitchen |
-| `cancel_order` | `cart_view` | cancel (pre-payment) |
-| `search_my_orders` | `orders_list` | history + per-status counts |
-| `end_conversation` | `session_end` | close WS after closing line |
-| `get_current_datetime` | — | timezone-aware clock |
-
-Every connection re-prepends a fresh `CURRENT TIME CONTEXT` block with both the restaurant's IST time and the customer's local timezone so the agent never quotes stale times.
+| `/auth` | register, login, logout (revokes the token), `ws-ticket` | public |
+| `WS /ws?ticket=…` | voice call | ticket |
+| `/menu` | catalog read · CRUD, image upload, re-embed | public · admin |
+| `/orders` | a customer's orders and cart | user |
+| `/admin/orders` · `/admin/orders/stream` (SSE) | kitchen feed, status changes, cancel | staff |
+| `/admin` edits · voids · refunds | order corrections (audited) | cashier |
+| `/admin/analytics` | overview, time series, peak hours | admin |
+| `/tables` | QR resolve, guest tab, call waiter · floor view · CRUD | public · staff · admin |
+| `/table-sessions` | view · settle, transfer, merge | staff · cashier |
+| `/floors` · `/zones` · `/service-areas` | layout and delivery areas | admin |
+| `/customers` | customer records | admin |
+| `/staff` | staff accounts and roles | owner/manager |
+| `/settings` | restaurant profile (public read) · charge policy | public · admin |
+| `/payments` | quote, Razorpay order/verify/webhook · cash | public · cashier |
+| `/health` | liveness | public |
 
 ---
 
-## Running tests
+## Voice agent tools
+
+Each tool is a Pipecat direct function (exposed to the model with a `pc_` prefix). Tools that change what's on screen also push a `ui_event`.
+
+| Tool | Mode | UI event | What it does |
+|---|---|---|---|
+| `search_menu` | both | `menu_results` | semantic + keyword search |
+| `filter_menu` | both | `menu_results` | filter by category, dietary, spice, price, keyword |
+| `get_menu_categories` | both | `menu_results` | menu overview |
+| `add_to_order` · `update_quantity` · `remove_from_order` · `view_order` | both | `cart_view` | cart |
+| `confirm_order` | both | `order_confirmed` | send to the kitchen |
+| `cancel_order` | both | `cart_view` | cancel before payment |
+| `end_conversation` | both | `session_end` | hang up after the closing line |
+| `get_current_datetime` | both | — | restaurant time + caller's timezone |
+| `lookup_customer` · `register_customer` · `update_customer` | parcel | `customer_card` | find by 4-digit code or phone, register, edit |
+| `check_delivery_area` | parcel | `delivery_check` | area/pincode allowlist |
+| `search_my_orders` | parcel | `orders_list` | order history |
+| `set_table` | dine-in | — | bind the call to a table by number (if the QR didn't) |
+| `request_bill` | dine-in | `bill_requested` | ask for the bill |
+
+The server itself also sends `time_warning` and `session_end` when a call reaches its time limit.
+
+---
+
+## Orders and billing
+
+- **Order lifecycle** (`services/order_lifecycle.py`)
+  - dine-in: `cart → confirmed → cooking → served → paid`
+  - parcel: `cart → confirmed → cooking → ready → delivered → paid`
+  - either can be `cancelled`
+- **Charges** come from `CHARGE_POLICY` in `config.py` (service 10 %, AC 5 % for dine-in in AC zones, GST 5 % shown as CGST + SGST). Admins can override it at runtime from **Pricing** (`/settings/charge-policy`); the override is stored in `app_settings`. Voice narration, UI cards, REST responses and printed bills all use the same calculation.
+- Voids, refunds, settlements, transfers and merges are written to the audit log.
+
+---
+
+## Tests
 
 ```bash
 uv run pytest -q
 ```
 
-Tests hit a real PostgreSQL database (`restaurant_test` by default — see `tests/conftest.py`). Each test rolls back its own transaction.
+Tests run against a real PostgreSQL database, `restaurant_test` (connection string in `tests/conftest.py`). It needs the `vector` extension; database tests are skipped if setup fails. Importing `config` needs the required env vars, so keep a `.env` in place.
+
+---
+
+## Deployment
+
+The backend runs on **Google Cloud Run** and the frontend on **Vercel** — see [`DEPLOY.md`](DEPLOY.md) for the step-by-step guide and `deploy.sh` for the deploy command. The container runs `alembic upgrade head` on boot, then starts the app.
 
 ---
 
 ## Common tasks
 
-**Add a new menu item without a REST call.** Edit `agent/restaurant/menu.py`, optionally add an `IMAGE_URLS` entry, restart — the seeder reconciles.
+**Add a menu item.** Use the admin Menu page, or `POST /menu`. Editing `agent/restaurant/menu.py` only seeds a fresh, empty database; on an existing one it just syncs image URLs.
 
-**Change bill rates** (service charge, GST). Edit `BILL_CHARGES` in `config.py`. Everything — voice narration, UI cards, REST responses, printed bill — rebuilds off that single source.
+**Change charges.** Edit them on the admin Pricing page. `CHARGE_POLICY` in `config.py` is only the default.
 
-**Swap the primary LLM.** Edit `pipeline/voice_pipeline.py` — the service is `FallbackLLMService(api_key=MISTRAL, groq_api_key=GROQ, …)`. Swap to a different backend there.
+**Change the voice or model.** Set `GEMINI_VOICE` / `GEMINI_MODEL`.
 
 **Generate a migration.**
 ```bash
