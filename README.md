@@ -2,7 +2,7 @@
 
 Backend for a voice-first Indian restaurant. Guests talk to **Arjun**, the AI host, over one WebSocket that carries audio both ways plus structured UI events; staff run the restaurant from a role-based back-office (kitchen display, floor and tables, billing, menu, analytics).
 
-> Companion frontend: [OrderManagerFrontend](https://github.com/mohammed-usmani/OrderManagerFrontend). Live: [order-manager-frontend.vercel.app](https://order-manager-frontend.vercel.app)
+> Companion frontend: [OrderManagerFrontend](https://github.com/mohammed-usmani/OrderManagerFrontend). The hosted backend is paused to save cost; run it locally with the steps below.
 
 ---
 
